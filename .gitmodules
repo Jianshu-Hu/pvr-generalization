@@ -1,0 +1,3 @@
+[submodule "robot-colosseum"]
+	path = robot-colosseum
+	url = https://github.com/robot-colosseum/robot-colosseum.git
