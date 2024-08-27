@@ -1,0 +1,50 @@
+# home_dir should be the location of pvr-generalization
+root_dir: '/bd_byta6000i0/users/jhu/pvr-generalization'
+epoch: 50
+device: 'cuda'
+frame_stack: 3
+env:
+    root_dir: ${root_dir}
+    task_name: 'open_drawer'
+    config_file: 'pvr-imitation/env_cfgs/open_drawer.yaml'
+eval:
+    eval_freq: 10
+    eval_episodes: 5
+    max_length: 120
+    data_cfg:
+      # The image types that will be recorded
+      images:
+        rgb: True
+        depth: False
+        mask: False
+        point_cloud: False
+      # The cameras that we will be enabled
+      cameras:
+        left_shoulder: False
+        right_shoulder: False
+        overhead: False
+        wrist: False
+        front: True
+encoder:
+  encoder_name: 'vit_base_patch14_dinov2.lvd142m'
+  checkpoint_path: 'pvr_ckpts/vit_base_patch14_dinov2.lvd142m.bin'
+
+dataset:
+  root_dir: ${root_dir}
+  data_folder: 'rlbench_data/open_drawer/variation0/episodes'
+  img_type: 'front_rgb'
+  encoder_name: ${encoder.encoder_name}
+  checkpoint_path: ${encoder.checkpoint_path}
+  batch_size: 256
+  frame_stack: ${frame_stack}
+  device: ${device}
+
+policy:
+  root_dir: ${root_dir}
+  device: ${device}
+  input_dim: ???
+  hidden_dim: [256, 256]
+  action_dim: ???
+  encoder_name: ${encoder.encoder_name}
+  checkpoint_path: ${encoder.checkpoint_path}
+  frame_stack: ${frame_stack}

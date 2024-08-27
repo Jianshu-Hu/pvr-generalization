@@ -1,3 +1,11 @@
+outputs/
+
+# pre-trained model
+pvr_ckpts/
+
+# dataset
+rlbench_data/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
