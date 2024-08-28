@@ -17,12 +17,14 @@ class PrecomputedFeatureDataset(Dataset):
         self.device = config.device
         self.frame_stack = config.frame_stack
         self.encoder, self.embedding_dim, self.transform = \
-            load_pretrained_model(encoder_name=config.encoder_name,
-                                  checkpoint_path=os.path.join(config.root_dir, config.checkpoint_path))
+            load_pretrained_model(encoder_name=config.encoder_name, root_dir=config.root_dir)
         self.encoder.to(self.device)
+        for param in self.encoder.parameters():
+            param.requires_grad = False
 
         self.obs_dim = None
-        self.action_dim = None
+        self.joint_action_dim = None
+        self.gripper_action_dim = None
 
         self.episodes_obs, self.episodes_actions, self.total_num = self.prepare_data()
 
@@ -60,10 +62,15 @@ class PrecomputedFeatureDataset(Dataset):
                 demo = pickle.load(f)
             for obs in demo:
                 joint_action = (obs.joint_velocities).astype(float)
-                gripper_action = np.array([obs.gripper_open])
+                # for discrete gripper action, use one-hot encoding
+                if obs.gripper_open == 0.0:
+                    gripper_action = np.array([1.0, 0.0])
+                else:
+                    gripper_action = np.array([0.0, 1.0])
                 action = np.concatenate([joint_action, gripper_action])
-                if self.action_dim is None:
-                    self.action_dim = action.shape[0]
+                if self.joint_action_dim is None:
+                    self.joint_action_dim = joint_action.shape[0]
+                    self.gripper_action_dim = gripper_action.shape[0]
                 actions_in_one_episode.append(action)
             episodes_actions.append(np.stack(actions_in_one_episode, axis=0))
 
@@ -72,7 +79,7 @@ class PrecomputedFeatureDataset(Dataset):
         print('Finish loading the data')
         print('Num of episodes: ' + str(len(total_num)-1))
         print('Obs dim: ' + str(self.obs_dim))
-        print('Action dim: ' + str(self.action_dim))
+        print('Action dim: ' + str(self.joint_action_dim+self.gripper_action_dim))
         return episodes_obs, episodes_actions, total_num
 
     def __len__(self):

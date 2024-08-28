@@ -7,6 +7,9 @@ import numpy as np
 import os
 import torch
 import random
+from datetime import datetime
+from PIL import Image
+import csv
 
 from dataset import PrecomputedFeatureDataset
 from imitation_learning import ImitationLearningPolicy
@@ -57,13 +60,20 @@ def make_env(config):
     return rlbench_env, task_env
 
 
-def eval(task_env, config, policy):
+def eval(task_env, config, policy, log_dir):
+    # TODO: find out which part is time-consuming and accelerate it
     sum_reward_list = []
     for ep_idx in range(config.eval_episodes):
         _, obs = task_env.reset()
         sum_reward = 0
         for time_index in range(config.max_length):
             obs = retrieve_obs(obs, config.data_cfg)
+            if config.save_results:
+                new_log_dir = os.path.join(log_dir, 'images_episode_'+str(ep_idx))
+                if not os.path.exists(new_log_dir):
+                    os.mkdir(new_log_dir)
+                img = Image.fromarray(obs)
+                img.save(new_log_dir+'/'+str(time_index)+'.png')
             action = policy.act(obs, time_index == 0)
             obs, reward, terminate = task_env.step(action)
             sum_reward += reward
@@ -97,32 +107,43 @@ def train(config):
     print("Policy")
     print("========================================")
     config.policy.input_dim = dataset.obs_dim
-    config.policy.action_dim = dataset.action_dim
+    config.policy.action_dim = {'joint_ac_dim': dataset.joint_action_dim, 'gripper_ac_dim': dataset.gripper_action_dim}
     policy = ImitationLearningPolicy(config.policy)
-    param_size = 0
-    for param in policy.actor.parameters():
-        param_size += param.nelement() * param.element_size()
-    buffer_size = 0
-    for buffer in policy.actor.buffers():
-        buffer_size += buffer.nelement() * buffer.element_size()
-    print('Model size: {:.3f}MB'.format((param_size + buffer_size) / (1024**2)))
-    print('Number of parameters of the policy: ' + str(sum(p.numel() for p in policy.actor.parameters())))
-    policy.actor.train()
-
-    # print("========================================")
-    # print("Eval initial policy")
-    # print("========================================")
-    # policy.actor.eval()
-    # eval(task_env, config.eval, policy)
+    trainable_param_size = 0
+    frozen_param_size = 0
+    num_trainable = 0
+    num_frozen = 0
+    for param in policy.parameters():
+        if param.requires_grad:
+            trainable_param_size += param.nelement() * param.element_size()
+            num_trainable += param.numel()
+        else:
+            frozen_param_size += param.nelement() * param.element_size()
+            num_frozen += param.numel()
+    # buffer_size = 0
+    # for buffer in policy.buffers():
+    #     buffer_size += buffer.nelement() * buffer.element_size()
+    print('Actor size: {:.3f}MB'.format(trainable_param_size / (1024**2)))
+    print('Pretrained encoder size: {:.3f}MB'.format(frozen_param_size / (1024 ** 2)))
+    print('Number of trainable parameters of the policy: ' + str(num_trainable))
+    policy.train()
 
     print("========================================")
     print("Train")
     print("========================================")
-    score_log = 0
+    # save the training and evaluation results to csv for quick check
+    csv_result = [
+        ['Epoch', 'Loss', 'Score', 'Highest_score']
+    ]
+    with open(config.specific_log_dir+'/evaluation_scores.csv', 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerows(csv_result)
+    score = 0
+    highest_score = 0
     for epoch in tqdm(range(config["epoch"])):
         avg_loss = 0
         for ind, batch in enumerate(dataloader):
-            loss = policy.update(batch)
+            loss = policy(batch)
             avg_loss = (avg_loss*ind+loss)/(ind+1)
         print('avg loss in epoch ' + str(epoch) + ': ' + str(avg_loss))
 
@@ -130,9 +151,16 @@ def train(config):
             print("========================================")
             print("Eval at " + str(epoch+1) + " epoch")
             print("========================================")
-            policy.actor.eval()
-            eval(task_env, config.eval, policy)
-            policy.actor.train()
+            policy.eval()
+            score = eval(task_env, config.eval, policy, config.specific_log_dir)
+            policy.train()
+            if score > highest_score:
+                highest_score = score
+
+        csv_result.append([epoch, avg_loss, score, highest_score])
+        with open(config.specific_log_dir+'/evaluation_scores.csv', 'w', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerows(csv_result)
 
     rlbench_env.shutdown()
 
@@ -141,9 +169,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--config", type=str, default="cfgs/config.yaml", help="config file")
-    # parser.add_argument("--name", type=str, default="test")
-    # parser.add_argument("--encoder", type=str, default="dinov2_base_patch14")
-    # parser.add_argument("--env", type=str, default="dmc_walker_stand-v1")
+    parser.add_argument("--name", type=str, default="test")
+    parser.add_argument("--encoder", type=str, default="vc1_base",
+                        choices={'dinov2_base', "vc1_base", "vc1_large"})
+    parser.add_argument("--env", type=str, default="open_drawer")
     args = parser.parse_args()
 
     # set seed
@@ -153,10 +182,25 @@ if __name__ == "__main__":
     np.random.seed(args.seed)
     random.seed(args.seed)
 
-    config = OmegaConf.load(args.config)
     print("========================================")
     print("Job Configuration")
     print("========================================")
+    config = OmegaConf.load(args.config)
+
+    config.encoder_name = args.encoder
+    config.task_name = args.env
+
+    # create log dir
+    current_time = datetime.now()
+    log_dir = os.path.join(config.root_dir, config.log_dir, args.name)
+    if not os.path.exists(log_dir):
+        os.mkdir(log_dir)
+    specific_log_dir = os.path.join(config.root_dir, config.log_dir, args.name,
+                                    current_time.strftime("%Y-%m-%d-%H-%M-%S")+'-seed-'+str(args.seed))
+    os.mkdir(specific_log_dir)
+    print("files log dir:" + specific_log_dir)
+    config.specific_log_dir = specific_log_dir
+
     print(config)
 
     train(config)

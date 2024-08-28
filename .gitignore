@@ -6,6 +6,10 @@ pvr_ckpts/
 # dataset
 rlbench_data/
 
+# logs
+pvr-imitation/logs
+pvr-imitation/run_experiments
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
