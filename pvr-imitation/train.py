@@ -1,5 +1,7 @@
 import argparse
 from omegaconf import OmegaConf
+import time
+import multiprocessing
 
 from tqdm import tqdm
 from torch.utils.data import DataLoader
@@ -61,12 +63,13 @@ def make_env(config):
 
 
 def eval(task_env, config, policy, log_dir):
-    # TODO: find out which part is time-consuming and accelerate it
+    # TODO: implement multi-processing here for accelerating
     sum_reward_list = []
     for ep_idx in range(config.eval_episodes):
         _, obs = task_env.reset()
         sum_reward = 0
         for time_index in range(config.max_length):
+            proprio = (obs.joint_positions).astype(np.float32)
             obs = retrieve_obs(obs, config.data_cfg)
             if config.save_results:
                 new_log_dir = os.path.join(log_dir, 'images_episode_'+str(ep_idx))
@@ -74,7 +77,7 @@ def eval(task_env, config, policy, log_dir):
                     os.mkdir(new_log_dir)
                 img = Image.fromarray(obs)
                 img.save(new_log_dir+'/'+str(time_index)+'.png')
-            action = policy.act(obs, time_index == 0)
+            action = policy.act(obs, proprio, time_index == 0)
             obs, reward, terminate = task_env.step(action)
             sum_reward += reward
             if terminate:
@@ -84,6 +87,14 @@ def eval(task_env, config, policy, log_dir):
     avg_reward = sum(sum_reward_list)/len(sum_reward_list)
     print(f"// Average Score: {avg_reward}")
     return avg_reward
+
+
+# def eval_multiprocess(task_env_vec, config, policy, log_dir):
+#     pool = multiprocessing.Pool(processes=multiprocessing.cpu_count())
+#     results = [pool.apply_async(eval, args=(env, config, policy, log_dir,)) for env in task_env_vec]
+#     final_results = [results.get() for result in results]
+#     print(final_results)
+#     return sum(final_results)/len(final_results)
 
 
 def train(config):

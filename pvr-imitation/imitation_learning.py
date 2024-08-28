@@ -46,7 +46,7 @@ class ImitationLearningPolicy(nn.Module):
         self.frame_stack = config.frame_stack
         self.memory_frames_queue = None
 
-    def act(self, obs, start):
+    def act(self, obs, proprio, start):
         if start:
             # at the beginning of episode, reinitialize the memory bank
             self.memory_frames_queue = deque(maxlen=self.frame_stack)
@@ -57,6 +57,7 @@ class ImitationLearningPolicy(nn.Module):
                 # add feature vectors of past frames
                 index_in_the_queue = max(len(self.memory_frames_queue) - 1 - frame_index, 0)
                 feature = torch.concat((feature, self.memory_frames_queue[index_in_the_queue]), dim=-1)
+            feature = torch.concat((feature, torch.tensor(proprio).unsqueeze(0).to(self.device)), dim=-1)
             joint_action = self.joint_actor(feature)
             gripper_action = self.gripper_actor(feature)
             gripper_action = (gripper_action[:, 0] < gripper_action[:, 1]).float().unsqueeze(0)

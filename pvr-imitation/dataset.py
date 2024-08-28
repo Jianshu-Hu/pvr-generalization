@@ -51,17 +51,17 @@ class PrecomputedFeatureDataset(Dataset):
                     # add feature vectors of past frames
                     index_in_the_queue = max(len(memory_frames_queue)-1-frame_index, 0)
                     processed_feature = np.concatenate((processed_feature, memory_frames_queue[index_in_the_queue]))
-                if self.obs_dim is None:
-                    self.obs_dim = processed_feature.shape[0]
                 images_in_one_episode.append(processed_feature)
                 total_num[i+1] += 1
-            episodes_obs.append(np.stack(images_in_one_episode, axis=0))
+            images_in_one_episode = np.stack(images_in_one_episode, axis=0)
 
             actions_in_one_episode = []
+            proprio_in_one_episode = []
             with open(os.path.join(self.root_dir, self.folder, 'episode'+str(i), 'low_dim_obs.pkl'), "rb") as f:
                 demo = pickle.load(f)
             for obs in demo:
-                joint_action = (obs.joint_velocities).astype(float)
+                joint_action = (obs.joint_velocities).astype(np.float32)
+                joint_position = (obs.joint_positions).astype(np.float32)
                 # for discrete gripper action, use one-hot encoding
                 if obs.gripper_open == 0.0:
                     gripper_action = np.array([1.0, 0.0])
@@ -72,7 +72,13 @@ class PrecomputedFeatureDataset(Dataset):
                     self.joint_action_dim = joint_action.shape[0]
                     self.gripper_action_dim = gripper_action.shape[0]
                 actions_in_one_episode.append(action)
+                proprio_in_one_episode.append(joint_position)
             episodes_actions.append(np.stack(actions_in_one_episode, axis=0))
+            # include proprioceptive feature into the obs
+            proprio_in_one_episode = np.stack(proprio_in_one_episode, axis=0)
+            episodes_obs.append(np.concatenate((images_in_one_episode, proprio_in_one_episode), axis=-1))
+            if self.obs_dim is None:
+                self.obs_dim = images_in_one_episode.shape[1]+proprio_in_one_episode.shape[1]
 
             assert episodes_obs[-1].shape[0] == episodes_actions[-1].shape[0]
 
