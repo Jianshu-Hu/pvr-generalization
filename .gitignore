@@ -10,6 +10,11 @@ rlbench_data/
 pvr-imitation/logs
 pvr-imitation/run_experiments
 
+# rvt
+RVT/rvt/data/
+RVT/rvt/run_experiments/
+RVT/rvt/runs/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
