@@ -7,12 +7,18 @@
 [submodule "rlbench"]
 	path = rlbench
 	url = https://github.com/stepjam/RLBench.git
-[submodule "RVT/libs/YARR"]
-	path = RVT/libs/YARR
+[submodule "RVT/rvt/libs/Pyrep"]
+	path = RVT/rvt/libs/Pyrep
+	url = https://github.com/stepjam/PyRep.git
+[submodule "RVT/rvt/libs/RLBench"]
+	path = RVT/rvt/libs/RLBench
+	url = https://github.com/buttomnutstoast/RLBench.git
+[submodule "RVT/rvt/libs/YARR"]
+	path = RVT/rvt/libs/YARR
 	url = https://github.com/NVlabs/YARR.git
-[submodule "RVT/libs/peract"]
-	path = RVT/libs/peract
+[submodule "RVT/rvt/libs/peract"]
+	path = RVT/rvt/libs/peract
 	url = https://github.com/NVlabs/peract.git
-[submodule "RVT/libs/peract_colab/peract_colab"]
-	path = RVT/libs/peract_colab/peract_colab
+[submodule "RVT/rvt/libs/peract_colab/peract_colab"]
+	path = RVT/rvt/libs/peract_colab/peract_colab
 	url = https://github.com/peract/peract_colab.git
