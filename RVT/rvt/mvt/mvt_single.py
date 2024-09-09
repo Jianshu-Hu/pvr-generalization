@@ -63,6 +63,7 @@ class MVT(nn.Module):
         xops,
         rot_ver,
         num_rot,
+        pre_image_process,
         renderer_device="cuda:0",
         renderer=None,
         no_feat=False,
@@ -122,6 +123,9 @@ class MVT(nn.Module):
         :param num_rot: number of discrete rotations per axis, used only when
             rot_ver is 1
         :param no_feat: whether to return features or not
+
+        :param pre_image_process: use a pretrained image encoder to preprocess the RGB images
+            from different views
         """
 
         super().__init__()
@@ -153,6 +157,7 @@ class MVT(nn.Module):
         self.rot_ver = rot_ver
         self.num_rot = num_rot
         self.no_feat = no_feat
+        self.pre_image_process = pre_image_process
 
         if self.cvx_up:
             assert not self.inp_pre_con, (
@@ -232,6 +237,51 @@ class MVT(nn.Module):
             self.input_preprocess = lambda x: x
             inp_pre_out_dim = inp_img_feat_dim
 
+        if self.pre_image_process:
+            # load pretrained dinov2
+            # self.pretrained_image_encoder = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14_reg')
+            self.pretrained_image_encoder = torch.hub.load('../../pvr_ckpts/facebookresearch_dinov2_main',
+                                                           model='dinov2_vitb14_reg', source='local')
+            print('use pretrained image encoder to preprocess the rgb images')
+            self.pretrained_image_encoder.to('cuda')
+            self.pretrained_image_encoder.eval()
+            for param in self.pretrained_image_encoder.parameters():
+                param.requires_grad = False
+            # get emb dim
+            with torch.no_grad():
+                random_img = torch.randn(1, 3, 224, 224).to('cuda')
+                output = self.pretrained_image_encoder.forward_features(random_img)
+                feature = output['x_norm_patchtokens']
+                img_emb_dim = feature.size(2)
+            inp_pre_out_dim -= 3
+
+            self.img_compress_fc = DenseBlock(
+                img_emb_dim,
+                int(self.im_channels/2),
+                norm="group",
+                activation=activation,
+            )
+
+            self.patchify = Conv2DBlock(
+                inp_pre_out_dim,
+                int(self.im_channels/2),
+                kernel_sizes=self.img_patch_size,
+                strides=self.img_patch_size,
+                norm="group",
+                activation=activation,
+                padding=0,
+            )
+        else:
+            self.patchify = Conv2DBlock(
+                inp_pre_out_dim,
+                self.im_channels,
+                kernel_sizes=self.img_patch_size,
+                strides=self.img_patch_size,
+                norm="group",
+                activation=activation,
+                padding=0,
+            )
+
         if self.add_proprio:
             # proprio preprocessing encoder
             self.proprio_preprocess = DenseBlock(
@@ -240,16 +290,6 @@ class MVT(nn.Module):
                 norm="group",
                 activation=activation,
             )
-
-        self.patchify = Conv2DBlock(
-            inp_pre_out_dim,
-            self.im_channels,
-            kernel_sizes=self.img_patch_size,
-            strides=self.img_patch_size,
-            norm="group",
-            activation=activation,
-            padding=0,
-        )
 
         # lang preprocess
         if self.add_lang:
@@ -436,21 +476,52 @@ class MVT(nn.Module):
         # (bs * num_img, im_channels, h, w)
         d0 = self.input_preprocess(img)
 
-        # (bs * num_img, im_channels, h, w) ->
-        # (bs * num_img, im_channels, h / img_patch_strid, w / img_patch_strid) patches
-        ins = self.patchify(d0)
-        # (bs, im_channels, num_img, h / img_patch_strid, w / img_patch_strid) patches
-        ins = (
-            ins.view(
-                bs,
-                num_img,
-                self.im_channels,
-                num_pat_img,
-                num_pat_img,
+        if self.pre_image_process:
+            # process the RGB image with pretrained image encoder
+            with torch.no_grad():
+                # (bs * num_img, 3, h, w)
+                rgb_views_image = d0[:, 3:6, :, :]
+                # (bs * num_img, 7, h, w)
+                remaining_info = torch.cat((d0[:, 0:3, :, :], d0[:, 6:, :, :]), dim=1)
+                # (bs * num_img, num_p*num_p, d)
+                processed_image_patches = (self.pretrained_image_encoder.forward_features(
+                    rgb_views_image))['x_norm_patchtokens']
+                # (bs * num_img * num_p*num_p, d)
+                processed_image_patches = processed_image_patches.reshape(-1, processed_image_patches.size(-1))
+
+            # (bs * num_img * num_p * num_p, im_channel/2)
+            ins_rgb = self.img_compress_fc(processed_image_patches)
+            # (bs, num_img, num_p, num_p, im_channel/2)
+            ins_rgb = rearrange(ins_rgb, "(b n p1 p2) ... -> b n p1 p2 ...", b=bs, n=num_img,
+                                p1=num_pat_img, p2=num_pat_img)
+            # (bs, num_img, im_channel/2, num_p, num_p)
+            ins_rgb = ins_rgb.permute(0, 1, 4, 2, 3)
+
+            # (bs*num_img, im_channel/2, num_p, num_p)
+            ins_others = self.patchify(remaining_info)
+            # (bs, num_img, im_channel/2, num_p, num_p)
+            ins_others = rearrange(ins_others, "(b n) ... -> b n ...", b=bs, n=num_img)
+
+            # (bs, num_img, im_channel, num_p, num_p)
+            ins = torch.concat((ins_rgb, ins_others), dim=2)
+            # (bs, im_channel, num_img, num_p, num_p)
+            ins = ins.transpose(1, 2)
+        else:
+            # (bs * num_img, im_channels, h, w) ->
+            # (bs * num_img, im_channels, h / img_patch_strid, w / img_patch_strid) patches
+            ins = self.patchify(d0)
+            # (bs, im_channels, num_img, h / img_patch_strid, w / img_patch_strid) patches
+            ins = (
+                ins.view(
+                    bs,
+                    num_img,
+                    self.im_channels,
+                    num_pat_img,
+                    num_pat_img,
+                )
+                .transpose(1, 2)
+                .clone()
             )
-            .transpose(1, 2)
-            .clone()
-        )
 
         # concat proprio
         _, _, _d, _h, _w = ins.shape

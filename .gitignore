@@ -1,11 +1,12 @@
 outputs/
+run_experiments/
 
 # pre-trained model
 pvr_ckpts/
 
 # dataset
 rlbench_data/
-
+colosseum_dataset
 # logs
 pvr-imitation/logs
 pvr-imitation/run_experiments
@@ -14,6 +15,8 @@ pvr-imitation/run_experiments
 RVT/rvt/data/
 RVT/rvt/run_experiments/
 RVT/rvt/runs/
+RVT/rvt/saved_runs/
+RVT/rvt/replay
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

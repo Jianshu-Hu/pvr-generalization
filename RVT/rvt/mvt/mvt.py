@@ -58,6 +58,7 @@ class MVT(nn.Module):
         st_wpt_loc_aug,
         st_wpt_loc_inp_no_noise,
         img_aug_2,
+        pre_image_process,
         renderer_device="cuda:0",
     ):
         """MultiView Transfomer
@@ -74,6 +75,9 @@ class MVT(nn.Module):
             True.
         :param img_aug_2: similar to img_aug in rvt repo but applied only to
             point feat and not the whole point cloud
+
+        :param pre_image_process: use a pretrained image encoder to preprocess the RGB images
+            from different views
         """
         super().__init__()
 
