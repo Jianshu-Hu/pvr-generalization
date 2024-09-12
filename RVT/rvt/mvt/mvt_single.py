@@ -479,6 +479,8 @@ class MVT(nn.Module):
         if self.pre_image_process:
             # process the RGB image with pretrained image encoder
             with torch.no_grad():
+                # for now, we only consider the situation of combining (corr, rgbd, xyz)
+                assert d0.size(1) == 10
                 # (bs * num_img, 3, h, w)
                 rgb_views_image = d0[:, 3:6, :, :]
                 # (bs * num_img, 7, h, w)

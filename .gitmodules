@@ -22,3 +22,6 @@
 [submodule "RVT/rvt/libs/PyRep"]
 	path = RVT/rvt/libs/PyRep
 	url = https://github.com/stepjam/PyRep.git
+[submodule "GroundingDINO"]
+	path = GroundingDINO
+	url = https://github.com/IDEA-Research/GroundingDINO.git

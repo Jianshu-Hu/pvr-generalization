@@ -13,6 +13,7 @@ import rvt.mvt.utils as mvt_utils
 from rvt.mvt.mvt_single import MVT as MVTSingle
 from rvt.mvt.config import get_cfg_defaults
 from rvt.mvt.renderer import BoxRenderer
+from rvt.mvt.groundingdino_wrapper import GroundingDinoHeatMap
 
 
 class MVT(nn.Module):
@@ -59,6 +60,7 @@ class MVT(nn.Module):
         st_wpt_loc_inp_no_noise,
         img_aug_2,
         pre_image_process,
+        pre_heat_map,
         renderer_device="cuda:0",
     ):
         """MultiView Transfomer
@@ -78,6 +80,7 @@ class MVT(nn.Module):
 
         :param pre_image_process: use a pretrained image encoder to preprocess the RGB images
             from different views
+        :param pre_heat_map: in stage one, use a pretrained grounding dino to find the roi region in each view
         """
         super().__init__()
 
@@ -97,6 +100,7 @@ class MVT(nn.Module):
         del args["st_wpt_loc_aug"]
         del args["st_wpt_loc_inp_no_noise"]
         del args["img_aug_2"]
+        del args["pre_heat_map"]
 
         self.rot_ver = rot_ver
         self.num_rot = num_rot
@@ -128,6 +132,11 @@ class MVT(nn.Module):
         self.num_img = self.renderer.num_img
         self.proprio_dim = proprio_dim
         self.img_size = img_size
+
+        self.pre_heat_map = pre_heat_map
+        if self.pre_heat_map:
+            self.groundingdinoheatmap = GroundingDinoHeatMap()
+            print('Use the pretrained grounding DINO for detecting the region of interest for stage 1')
 
         self.mvt1 = MVTSingle(
             **args,
@@ -349,6 +358,7 @@ class MVT(nn.Module):
         img_feat,
         proprio=None,
         lang_emb=None,
+        lang_goal=None,
         img_aug=0,
         wpt_local=None,
         rot_x_y=None,
@@ -360,6 +370,7 @@ class MVT(nn.Module):
             (bs, num_points, img_feat_dim)
         :param proprio: tensor of shape (bs, priprio_dim)
         :param lang_emb: tensor of shape (bs, lang_len, lang_dim)
+        :param lang_goal: (bs, 1), language goal
         :param img_aug: (float) magnitude of augmentation in rgb image
         :param wpt_local: gt location of the wpt in 3D, tensor of shape
             (bs, 3)
@@ -403,6 +414,32 @@ class MVT(nn.Module):
             rot_x_y=rot_x_y,
             **kwargs,
         )
+
+        if self.pre_heat_map:
+            # use pretrained grounding-dino for getting the heat map
+            with torch.no_grad():
+                out_from_pretrained_grounding_dino = self.groundingdinoheatmap(img, lang_goal)
+                # test loss
+                _cross_entropy_loss = nn.CrossEntropyLoss(reduction="none")
+                # trans_loss = _cross_entropy_loss(out_from_pretrained_grounding_dino['trans'], out['trans']).mean()
+                # print(trans_loss)
+                # wpt_loss
+                mse_loss = nn.MSELoss()
+                wpt_test = self.get_wpt(
+                    out_from_pretrained_grounding_dino, y_q=None, mvt1_or_mvt2=True,
+                    dyn_cam_info=None,
+                )
+                wpt_original = self.get_wpt(
+                    out, y_q=None, mvt1_or_mvt2=True,
+                    dyn_cam_info=None,
+                )
+                # for i in range(wpt_test.size(0)):
+                #     print(f"{i}: {wpt_test[i]}")
+                #     print(f"{i}: {wpt_local[i]}")
+                wpt_loss = mse_loss(wpt_test, wpt_local)
+                print('new: ' + str(wpt_loss))
+                wpt_loss = mse_loss(wpt_original, wpt_local)
+                print('old: ' + str(wpt_loss))
 
         if self.stage_two:
             with torch.no_grad():

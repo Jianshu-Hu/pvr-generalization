@@ -537,6 +537,7 @@ class RVTAgent:
             1,
             self._net_mod.proprio_dim,
         )
+        assert replay_sample["lang_goal"].shape[1:] == (1, 1)
 
         # sample
         action_rot_grip = replay_sample["rot_grip_action_indicies"][
@@ -551,6 +552,7 @@ class RVTAgent:
         action_rot = action_gripper_pose[:, 3:7]  # (b, 4)
         action_grip = action_rot_grip[:, -1]  # (b,)
         lang_goal_embs = replay_sample["lang_goal_embs"][:, -1].float()
+        lang_goal = replay_sample["lang_goal"][:, -1]  # (b, 1)
         tasks = replay_sample["tasks"]
 
         proprio = arm_utils.stack_on_channel(replay_sample["low_dim_state"])  # (b, 4)
@@ -654,6 +656,7 @@ class RVTAgent:
                 img_feat=img_feat,
                 proprio=proprio,
                 lang_emb=lang_goal_embs,
+                lang_goal=lang_goal,
                 img_aug=img_aug,
                 wpt_local=wpt_local if self._network.training else None,
                 rot_x_y=rot_x_y if self.rot_ver == 1 else None,
