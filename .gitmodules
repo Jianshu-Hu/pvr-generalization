@@ -10,9 +10,6 @@
 [submodule "RVT/rvt/libs/RLBench"]
 	path = RVT/rvt/libs/RLBench
 	url = https://github.com/buttomnutstoast/RLBench.git
-[submodule "RVT/rvt/libs/YARR"]
-	path = RVT/rvt/libs/YARR
-	url = https://github.com/NVlabs/YARR.git
 [submodule "RVT/rvt/libs/peract"]
 	path = RVT/rvt/libs/peract
 	url = https://github.com/NVlabs/peract.git
@@ -25,3 +22,6 @@
 [submodule "GroundingDINO"]
 	path = GroundingDINO
 	url = https://github.com/IDEA-Research/GroundingDINO.git
+[submodule "RVT/rvt/libs/YARR"]
+	path = RVT/rvt/libs/YARR
+	url = https://github.com/Jianshu-Hu/YARR.git
