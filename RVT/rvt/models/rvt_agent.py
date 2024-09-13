@@ -296,6 +296,7 @@ class RVTAgent:
         rot_ver: int = 0,
         rot_x_y_aug: int = 2,
         log_dir="",
+        pre_heat_map=False,
     ):
         """
         :param gt_hm_sigma: the std of the groundtruth hm, currently for for
@@ -342,6 +343,9 @@ class RVTAgent:
         self.move_pc_in_bound = move_pc_in_bound
         self.rot_ver = rot_ver
         self.rot_x_y_aug = rot_x_y_aug
+        self.pre_heat_map = pre_heat_map
+        if self.pre_heat_map:
+            assert self.stage_two
 
         self._cross_entropy_loss = nn.CrossEntropyLoss(reduction="none")
         if isinstance(self._network, DistributedDataParallel):
@@ -482,19 +486,26 @@ class RVTAgent:
 
         if get_q_trans:
             pts = None
-            # (bs, h*w, nc)
-            q_trans = out["trans"].view(bs, nc, h * w).transpose(1, 2)
-            if not only_pred:
-                q_trans = q_trans.clone()
-
-            # if two stages, we concatenate the q_trans, and replace all other
-            # q
-            if self.stage_two:
+            if self.pre_heat_map:
+                # do not need to train the stage one
                 out = out["mvt2"]
                 q_trans2 = out["trans"].view(bs, nc, h * w).transpose(1, 2)
                 if not only_pred:
-                    q_trans2 = q_trans2.clone()
-                q_trans = torch.cat((q_trans, q_trans2), dim=2)
+                    q_trans = q_trans2.clone()
+            else:
+                # (bs, h*w, nc)
+                q_trans = out["trans"].view(bs, nc, h * w).transpose(1, 2)
+                if not only_pred:
+                    q_trans = q_trans.clone()
+
+                # if two stages, we concatenate the q_trans, and replace all other
+                # q
+                if self.stage_two:
+                    out = out["mvt2"]
+                    q_trans2 = out["trans"].view(bs, nc, h * w).transpose(1, 2)
+                    if not only_pred:
+                        q_trans2 = q_trans2.clone()
+                    q_trans = torch.cat((q_trans, q_trans2), dim=2)
         else:
             pts = None
             q_trans = None
@@ -726,7 +737,8 @@ class RVTAgent:
             self.scaler.step(self._optimizer)
             self.scaler.update()
             self._lr_sched.step()
-
+            # print(f'total loss: {total_loss.item()}')
+            # print(f'trans loss: {trans_loss.item()}')
             loss_log = {
                 "total_loss": total_loss.item(),
                 "trans_loss": trans_loss.item(),
@@ -773,18 +785,20 @@ class RVTAgent:
 
     @torch.no_grad()
     def act(
-        self, step: int, observation: dict, deterministic=True, pred_distri=False
+        self, step: int, observation: dict, lang_goal: str, deterministic=True, pred_distri=False
     ) -> ActResult:
         if self.add_lang:
             lang_goal_tokens = observation.get("lang_goal_tokens", None).long()
             _, lang_goal_embs = _clip_encode_text(self.clip_model, lang_goal_tokens[0])
             lang_goal_embs = lang_goal_embs.float()
+            lang_goal = lang_goal
         else:
             lang_goal_embs = (
                 torch.zeros(observation["lang_goal_embs"].shape)
                 .float()
                 .to(self._device)
             )
+            lang_goal = None
 
         proprio = arm_utils.stack_on_channel(observation["low_dim_state"])
 
@@ -821,6 +835,7 @@ class RVTAgent:
             img_feat=img_feat,
             proprio=proprio,
             lang_emb=lang_goal_embs,
+            lang_goal=lang_goal,
             img_aug=0,  # no img augmentation while acting
         )
         _, rot_q, grip_q, collision_q, y_q, _ = self.get_q(
@@ -919,14 +934,7 @@ class RVTAgent:
         dims,
     ):
         bs, nc, h, w = dims
-        wpt_img = self._net_mod.get_pt_loc_on_img(
-            wpt_local.unsqueeze(1),
-            mvt1_or_mvt2=True,
-            dyn_cam_info=dyn_cam_info,
-            out=None
-        )
-        assert wpt_img.shape[1] == 1
-        if self.stage_two:
+        if self.pre_heat_map:
             wpt_img2 = self._net_mod.get_pt_loc_on_img(
                 wpt_local.unsqueeze(1),
                 mvt1_or_mvt2=False,
@@ -935,20 +943,51 @@ class RVTAgent:
             )
             assert wpt_img2.shape[1] == 1
 
-            # (bs, 1, 2 * num_img, 2)
-            wpt_img = torch.cat((wpt_img, wpt_img2), dim=-2)
-            nc = nc * 2
+            # (bs, 1, num_img, 2)
+            wpt_img = wpt_img2
+            nc = nc
 
-        # (bs, num_img, 2)
-        wpt_img = wpt_img.squeeze(1)
+            # (bs, num_img, 2)
+            wpt_img = wpt_img.squeeze(1)
 
-        action_trans = mvt_utils.generate_hm_from_pt(
-            wpt_img.reshape(-1, 2),
-            (h, w),
-            sigma=self.gt_hm_sigma,
-            thres_sigma_times=3,
-        )
-        action_trans = action_trans.view(bs, nc, h * w).transpose(1, 2).clone()
+            action_trans = mvt_utils.generate_hm_from_pt(
+                wpt_img.reshape(-1, 2),
+                (h, w),
+                sigma=self.gt_hm_sigma,
+                thres_sigma_times=3,
+            )
+            action_trans = action_trans.view(bs, nc, h * w).transpose(1, 2).clone()
+        else:
+            wpt_img = self._net_mod.get_pt_loc_on_img(
+                wpt_local.unsqueeze(1),
+                mvt1_or_mvt2=True,
+                dyn_cam_info=dyn_cam_info,
+                out=None
+            )
+            assert wpt_img.shape[1] == 1
+            if self.stage_two:
+                wpt_img2 = self._net_mod.get_pt_loc_on_img(
+                    wpt_local.unsqueeze(1),
+                    mvt1_or_mvt2=False,
+                    dyn_cam_info=dyn_cam_info,
+                    out=out,
+                )
+                assert wpt_img2.shape[1] == 1
+
+                # (bs, 1, 2 * num_img, 2)
+                wpt_img = torch.cat((wpt_img, wpt_img2), dim=-2)
+                nc = nc * 2
+
+            # (bs, num_img, 2)
+            wpt_img = wpt_img.squeeze(1)
+
+            action_trans = mvt_utils.generate_hm_from_pt(
+                wpt_img.reshape(-1, 2),
+                (h, w),
+                sigma=self.gt_hm_sigma,
+                thres_sigma_times=3,
+            )
+            action_trans = action_trans.view(bs, nc, h * w).transpose(1, 2).clone()
 
         return action_trans
 

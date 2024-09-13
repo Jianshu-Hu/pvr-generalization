@@ -61,6 +61,7 @@ class MVT(nn.Module):
         img_aug_2,
         pre_image_process,
         pre_heat_map,
+        heat_map_train,
         renderer_device="cuda:0",
     ):
         """MultiView Transfomer
@@ -101,6 +102,7 @@ class MVT(nn.Module):
         del args["st_wpt_loc_inp_no_noise"]
         del args["img_aug_2"]
         del args["pre_heat_map"]
+        del args["heat_map_train"]
 
         self.rot_ver = rot_ver
         self.num_rot = num_rot
@@ -134,15 +136,19 @@ class MVT(nn.Module):
         self.img_size = img_size
 
         self.pre_heat_map = pre_heat_map
+        self.heat_map_train = heat_map_train
+        if self.heat_map_train:
+            assert self.pre_heat_map
         if self.pre_heat_map:
             self.groundingdinoheatmap = GroundingDinoHeatMap()
             print('Use the pretrained grounding DINO for detecting the region of interest for stage 1')
-
-        self.mvt1 = MVTSingle(
-            **args,
-            renderer=self.renderer,
-            no_feat=self.stage_two,
-        )
+            assert self.stage_two
+        else:
+            self.mvt1 = MVTSingle(
+                **args,
+                renderer=self.renderer,
+                no_feat=self.stage_two,
+            )
         if self.stage_two:
             self.mvt2 = MVTSingle(**args, renderer=self.renderer)
 
@@ -342,7 +348,7 @@ class MVT(nn.Module):
         else:
             assert (lang_emb is None) or (
                 torch.all(lang_emb == 0)
-            ), f"Invalid input for lang={lang}"
+            ), f"Invalid input for lang={lang_emb}"
 
         if not (wpt_local is None):
             bs5, x6 = wpt_local.shape
@@ -392,13 +398,23 @@ class MVT(nn.Module):
                     # values in [-stdv, stdv]
                     noise = stdv * ((2 * torch.rand(*x.shape, device=x.device)) - 1)
                     x = x + noise
-            img = self.render(
-                pc=pc,
-                img_feat=img_feat,
-                img_aug=img_aug,
-                mvt1_or_mvt2=True,
-                dyn_cam_info=None,
-            )
+            if self.pre_heat_map:
+                # only have render in mvt2
+                img = self.render(
+                    pc=pc,
+                    img_feat=img_feat,
+                    img_aug=img_aug,
+                    mvt1_or_mvt2=False,
+                    dyn_cam_info=None,
+                )
+            else:
+                img = self.render(
+                    pc=pc,
+                    img_feat=img_feat,
+                    img_aug=img_aug,
+                    mvt1_or_mvt2=True,
+                    dyn_cam_info=None,
+                )
 
         if self.training:
             wpt_local_stage_one = wpt_local
@@ -406,40 +422,43 @@ class MVT(nn.Module):
         else:
             wpt_local_stage_one = wpt_local
 
-        out = self.mvt1(
-            img=img,
-            proprio=proprio,
-            lang_emb=lang_emb,
-            wpt_local=wpt_local_stage_one,
-            rot_x_y=rot_x_y,
-            **kwargs,
-        )
+        # test
+        # with torch.no_grad():
+        #     out_heat = self.groundingdinoheatmap(img, lang_goal)
+        # test loss
+        # _cross_entropy_loss = nn.CrossEntropyLoss(reduction="none")
+        # trans_loss = _cross_entropy_loss(out_from_pretrained_grounding_dino['trans'], out['trans']).mean()
+        # print(trans_loss)
+        # wpt_loss
+        # mse_loss = nn.MSELoss()
+        # wpt_test = out_from_pretrained_grounding_dino['trans']
+        # wpt_test = self.get_wpt(
+        #     out_from_pretrained_grounding_dino, y_q=None, mvt1_or_mvt2=True,
+        #     dyn_cam_info=None,
+        # )
+        # wpt_original = self.get_wpt(
+        #     out, y_q=None, mvt1_or_mvt2=True,
+        #     dyn_cam_info=None,
+        # )
+        # for i in range(wpt_test.size(0)):
+        #     print(f"{i}: {wpt_test[i]}")
+        #     print(f"{i}: {wpt_local[i]}")
+        # wpt_loss = mse_loss(wpt_test, wpt_local)
+        # print('new: ' + str(wpt_loss))
+        # wpt_loss = mse_loss(wpt_original, wpt_local)
+        # print('old: ' + str(wpt_loss))
 
         if self.pre_heat_map:
-            # use pretrained grounding-dino for getting the heat map
-            with torch.no_grad():
-                out_from_pretrained_grounding_dino = self.groundingdinoheatmap(img, lang_goal)
-                # test loss
-                _cross_entropy_loss = nn.CrossEntropyLoss(reduction="none")
-                # trans_loss = _cross_entropy_loss(out_from_pretrained_grounding_dino['trans'], out['trans']).mean()
-                # print(trans_loss)
-                # wpt_loss
-                mse_loss = nn.MSELoss()
-                wpt_test = self.get_wpt(
-                    out_from_pretrained_grounding_dino, y_q=None, mvt1_or_mvt2=True,
-                    dyn_cam_info=None,
-                )
-                wpt_original = self.get_wpt(
-                    out, y_q=None, mvt1_or_mvt2=True,
-                    dyn_cam_info=None,
-                )
-                # for i in range(wpt_test.size(0)):
-                #     print(f"{i}: {wpt_test[i]}")
-                #     print(f"{i}: {wpt_local[i]}")
-                wpt_loss = mse_loss(wpt_test, wpt_local)
-                print('new: ' + str(wpt_loss))
-                wpt_loss = mse_loss(wpt_original, wpt_local)
-                print('old: ' + str(wpt_loss))
+            out = {}
+        else:
+            out = self.mvt1(
+                img=img,
+                proprio=proprio,
+                lang_emb=lang_emb,
+                wpt_local=wpt_local_stage_one,
+                rot_x_y=rot_x_y,
+                **kwargs,
+            )
 
         if self.stage_two:
             with torch.no_grad():
@@ -447,9 +466,17 @@ class MVT(nn.Module):
                 if self.training:
                     # noise is added so that the wpt_local2 is not exactly at
                     # the center of the pc
-                    wpt_local_stage_one_noisy = mvt_utils.add_uni_noi(
-                        wpt_local_stage_one.clone().detach(), 2 * self.st_wpt_loc_aug
-                    )
+                    if self.heat_map_train:
+                        # use pretrained grounding-dino for getting the heat map
+                        with torch.no_grad():
+                            out_heat = self.groundingdinoheatmap(img, lang_goal)
+                        wpt_local_stage_one_noisy = mvt_utils.add_uni_noi(
+                            out_heat['trans'], 2 * self.st_wpt_loc_aug
+                        )
+                    else:
+                        wpt_local_stage_one_noisy = mvt_utils.add_uni_noi(
+                            wpt_local_stage_one.clone().detach(), 2 * self.st_wpt_loc_aug
+                        )
                     pc, rev_trans = mvt_utils.trans_pc(
                         pc, loc=wpt_local_stage_one_noisy, sca=self.st_sca
                     )
@@ -464,11 +491,17 @@ class MVT(nn.Module):
                         )
 
                 else:
-                    # bs, 3
-                    wpt_local = self.get_wpt(
-                        out, y_q=None, mvt1_or_mvt2=True,
-                        dyn_cam_info=None,
-                    )
+                    if self.pre_heat_map:
+                        # use pretrained grounding-dino for getting the heat map
+                        with torch.no_grad():
+                            out_heat = self.groundingdinoheatmap(img, lang_goal)
+                            wpt_local = out_heat['trans']
+                    else:
+                        # bs, 3
+                        wpt_local = self.get_wpt(
+                            out, y_q=None, mvt1_or_mvt2=True,
+                            dyn_cam_info=None,
+                        )
                     pc, rev_trans = mvt_utils.trans_pc(
                         pc, loc=wpt_local, sca=self.st_sca
                     )

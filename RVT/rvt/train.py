@@ -220,7 +220,7 @@ def experiment(rank, cmd_args, devices, port):
             **mvt_cfg,
         ).to(device)
         if ddp:
-            rvt = DDP(rvt, device_ids=[device])
+            rvt = DDP(rvt, device_ids=[device], find_unused_parameters=True)
 
         agent = rvt_agent.RVTAgent(
             network=rvt,
@@ -232,6 +232,7 @@ def experiment(rank, cmd_args, devices, port):
             cameras=CAMERAS,
             log_dir=f"{log_dir}/test_run/",
             cos_dec_max_step=EPOCHS * TRAINING_ITERATIONS,
+            pre_heat_map=mvt_cfg.pre_heat_map,
             **exp_cfg.peract,
             **exp_cfg.rvt,
         )

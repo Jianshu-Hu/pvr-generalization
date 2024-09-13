@@ -48,6 +48,7 @@ _C.st_wpt_loc_inp_no_noise = False
 _C.img_aug_2 = 0.0
 _C.pre_image_process = False
 _C.pre_heat_map = False
+_C.heat_map_train = False
 
 
 def get_cfg_defaults():

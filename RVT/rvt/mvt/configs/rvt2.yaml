@@ -14,3 +14,5 @@ st_wpt_loc_inp_no_noise: True
 wpt_img_aug: 0.0
 img_aug_2: 0.05
 pre_image_process: False
+pre_heat_map: False
+heat_map_train: False
