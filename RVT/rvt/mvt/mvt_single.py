@@ -581,7 +581,14 @@ class MVT(nn.Module):
             for self_attn, self_ff in self.layers[len(self.layers) // 2 :]:
                 x = self_attn(x) + x
                 x = self_ff(x) + x
+        elif self.self_cross_ver == 2:
+            assert self.pre_image_process
+            # we do not need within image self attention
 
+            # cross attention
+            for self_attn, self_ff in self.layers[len(self.layers) // 2 :]:
+                x = self_attn(x) + x
+                x = self_ff(x) + x
         else:
             assert False
 

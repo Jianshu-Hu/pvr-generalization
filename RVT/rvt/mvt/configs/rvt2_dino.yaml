@@ -10,6 +10,9 @@ img_patch_size: 14
 cvx_up: True
 xops: True
 rot_ver: 1
+st_wpt_loc_aug: 0.05
 st_wpt_loc_inp_no_noise: True
 wpt_img_aug: 0.0
 img_aug_2: 0.05
+pre_image_process: True
+self_cross_ver: 1
