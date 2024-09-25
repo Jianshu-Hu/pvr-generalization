@@ -13,8 +13,8 @@ import rvt.mvt.utils as mvt_utils
 
 from rvt.mvt.mvt_single import MVT as MVTSingle
 from rvt.mvt.config import get_cfg_defaults
-from rvt.mvt.renderer import BoxRenderer
-from rvt.mvt.groundingdino_wrapper import GroundingDinoHeatMap
+# from rvt.mvt.renderer import BoxRenderer
+# from rvt.mvt.groundingdino_wrapper import GroundingDinoHeatMap
 
 
 class MVT(nn.Module):
@@ -392,6 +392,7 @@ class MVT(nn.Module):
                 mvt1_or_mvt2=True,
                 dyn_cam_info=None,
             )
+            # np.save('test/test_img.npy', img.detach().cpu().numpy())
 
         if self.training:
             wpt_local_stage_one = wpt_local
