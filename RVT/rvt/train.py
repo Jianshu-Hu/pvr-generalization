@@ -66,18 +66,21 @@ def train(agent, dataset, training_iterations, rank=0):
         update_args = {
             "step": iteration,
         }
+        eval_log = True
         update_args.update(
             {
                 "replay_sample": batch,
                 "backprop": True,
                 "reset_log": (iteration == 0),
-                "eval_log": False,
+                "eval_log": eval_log,
             }
         )
         agent.update(**update_args)
 
     if rank == 0:
         log = print_loss_log(agent)
+        if eval_log:
+            eval_log = print_eval_log(agent)
 
     return log
 
@@ -232,6 +235,7 @@ def experiment(rank, cmd_args, devices, port):
             cameras=CAMERAS,
             log_dir=f"{log_dir}/test_run/",
             cos_dec_max_step=EPOCHS * TRAINING_ITERATIONS,
+            pre_heat_map=mvt_cfg.pre_heat_map,
             **exp_cfg.peract,
             **exp_cfg.rvt,
         )

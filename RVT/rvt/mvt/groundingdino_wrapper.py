@@ -263,6 +263,7 @@ class GroundingDinoHeatMap(nn.Module):
 
         hm = torch.zeros([b*nv, h, w]).cuda()
         hm[torch.arange(hm.size(0)), boxes[:, 1], boxes[:, 0]] = 1.0
+        # hm[torch.arange(hm.size(0)), int(h/2), int(w/2)] = 1.0
         hm = hm.reshape(b, nv, h, w)
 
         out = {"trans": hm}

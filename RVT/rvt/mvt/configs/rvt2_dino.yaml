@@ -16,3 +16,4 @@ wpt_img_aug: 0.0
 img_aug_2: 0.05
 pre_image_process: True
 self_cross_ver: 2
+pre_heat_map: False

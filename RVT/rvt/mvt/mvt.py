@@ -14,7 +14,7 @@ import rvt.mvt.utils as mvt_utils
 from rvt.mvt.mvt_single import MVT as MVTSingle
 from rvt.mvt.config import get_cfg_defaults
 # from rvt.mvt.renderer import BoxRenderer
-# from rvt.mvt.groundingdino_wrapper import GroundingDinoHeatMap
+from rvt.mvt.groundingdino_wrapper import GroundingDinoHeatMap
 
 
 class MVT(nn.Module):
@@ -61,6 +61,7 @@ class MVT(nn.Module):
         st_wpt_loc_inp_no_noise,
         img_aug_2,
         pre_image_process,
+        pre_heat_map,
         renderer_device="cuda:0",
     ):
         """MultiView Transfomer
@@ -80,6 +81,8 @@ class MVT(nn.Module):
 
         :param pre_image_process: use a pretrained image encoder to preprocess the RGB images
             from different views
+        :param pre_heat_map: use a pretrained grounding-dino to preprocess the RGB images to find the roi
+            in each view as the heat map
         """
         super().__init__()
 
@@ -99,6 +102,7 @@ class MVT(nn.Module):
         del args["st_wpt_loc_aug"]
         del args["st_wpt_loc_inp_no_noise"]
         del args["img_aug_2"]
+        del args["pre_heat_map"]
 
         self.rot_ver = rot_ver
         self.num_rot = num_rot
@@ -130,6 +134,11 @@ class MVT(nn.Module):
         self.num_img = self.renderer.num_img
         self.proprio_dim = proprio_dim
         self.img_size = img_size
+
+        self.pre_heat_map = pre_heat_map
+        if self.pre_heat_map:
+            self.grounding_heat_map = GroundingDinoHeatMap()
+            print('Use grounding dino for extracting roi.')
 
         self.mvt1 = MVTSingle(
             **args,
@@ -400,14 +409,20 @@ class MVT(nn.Module):
         else:
             wpt_local_stage_one = wpt_local
 
-        out = self.mvt1(
-            img=img,
-            proprio=proprio,
-            lang_emb=lang_emb,
-            wpt_local=wpt_local_stage_one,
-            rot_x_y=rot_x_y,
-            **kwargs,
-        )
+        if self.pre_heat_map:
+            if self.training:
+                out = self.grounding_heat_map(img, lang_goal)
+            else:
+                out = self.grounding_heat_map(img, np.array([[lang_goal]]))
+        else:
+            out = self.mvt1(
+                img=img,
+                proprio=proprio,
+                lang_emb=lang_emb,
+                wpt_local=wpt_local_stage_one,
+                rot_x_y=rot_x_y,
+                **kwargs,
+            )
 
         if self.stage_two:
             with torch.no_grad():
@@ -415,6 +430,12 @@ class MVT(nn.Module):
                 if self.training:
                     # noise is added so that the wpt_local2 is not exactly at
                     # the center of the pc
+                    if self.pre_heat_map:
+                        # bs, 3
+                        wpt_local_stage_one = self.get_wpt(
+                            out, y_q=None, mvt1_or_mvt2=True,
+                            dyn_cam_info=None,
+                        )
                     wpt_local_stage_one_noisy = mvt_utils.add_uni_noi(
                         wpt_local_stage_one.clone().detach(), 2 * self.st_wpt_loc_aug
                     )
