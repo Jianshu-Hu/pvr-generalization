@@ -8,6 +8,7 @@ import torch.nn as nn
 import numpy as np
 from PIL import Image
 import clip
+from einops import rearrange, repeat
 
 
 class GroundingDinoHeatMap(nn.Module):
@@ -16,9 +17,10 @@ class GroundingDinoHeatMap(nn.Module):
         self.root_path = '../../GroundingDINO/'
         self.model = load_model(self.root_path+"groundingdino/config/GroundingDINO_SwinT_OGC.py",
                                 self.root_path+"weights/groundingdino_swint_ogc.pth")
-        self.resize = T.Resize(800)
+        self.resize_size = 224
+        self.resize = T.Resize(self.resize_size)
         # the number of top bounding boxes in each view
-        self.K = 1
+        self.K = 5
 
         self.all_combination = []
         self.num_view = None
@@ -30,7 +32,7 @@ class GroundingDinoHeatMap(nn.Module):
 
         self.cosine_similarity = torch.nn.CosineSimilarity(dim=-1, eps=1e-08)
 
-    def batch_predict(self, image: torch.Tensor, captions: List):
+    def batch_predict(self, image: torch.Tensor, captions: List, h: int, w: int):
         captions = list(map(preprocess_caption, captions))
 
         with torch.no_grad():
@@ -42,9 +44,16 @@ class GroundingDinoHeatMap(nn.Module):
         max_logits = prediction_logits.max(dim=-1)[0]  # (bs, nq)
         prediction_boxes = outputs["pred_boxes"]  # (bs, nq, 4)
 
-        # filter the logits
+        # filter the logits: the bounding box may include the whole image sometimes, filter them.
+        # filter the logits: the height or width of the bounding box may be 1, filter them.
         box_size = prediction_boxes[:, :, 2]*prediction_boxes[:, :, 3]  # (bs, nq)
         filter = box_size > 0.81
+        max_logits[filter] = 0.0
+
+        filter = (prediction_boxes[:, :, 2]*w).to(torch.int) <= 1
+        max_logits[filter] = 0.0
+
+        filter = (prediction_boxes[:, :, 3]*h).to(torch.int) <= 1
         max_logits[filter] = 0.0
 
         # top-k
@@ -53,67 +62,6 @@ class GroundingDinoHeatMap(nn.Module):
         top_box = prediction_boxes[torch.arange(bs).reshape(bs, 1), top_ind]   # (bs, K, 4)
 
         return top_box
-
-    def find_all_combinations(self, all_centers, view_index, to_tensor):
-        # search for all combinations
-        new_combination = []
-        if len(self.all_combination) == 0:
-            for k in range(self.K):
-                new_combination.append([all_centers[:, view_index, k, :]])
-        else:
-            for point in self.all_combination:
-                for k in range(self.K):
-                    temp_point = list(point)
-                    temp_point.append(all_centers[:, view_index, k, :])
-                    if to_tensor:
-                        temp_point = torch.stack(temp_point, dim=1)
-                    new_combination.append(temp_point)
-            if to_tensor:
-                new_combination = torch.stack(new_combination, dim=1)
-        self.all_combination = new_combination
-
-    def find_closest_center(self, all_center_corr):
-        # Input: the corresponding global coordinates of the centers (b, nv, K, 3),
-        # For all nv images, we can have K^nv possible centers pairs
-        # Find the centers pair whose sum of relative distance is smallest .
-        b, nv, K, _ = all_center_corr.shape
-        self.all_combination = []
-        for num_view in range(nv):
-            if num_view == nv-1:
-                # save as tensor
-                to_tensor = True
-            else:
-                to_tensor = False
-            self.find_all_combinations(all_center_corr, num_view, to_tensor)
-        # self.all_combination.shape (b, K^nv, nv, 3)
-        mean = torch.mean(self.all_combination, dim=2, keepdim=True)
-        diff = torch.mean(torch.sum((self.all_combination-mean)**2, dim=-1), dim=-1)
-        min_dis_ind = torch.argmin(diff, dim=-1)
-        # [b, 3]
-        final_center = mean[torch.arange(b), min_dis_ind, 0, :]
-        return final_center
-
-    @torch.no_grad()
-    def forward_old(self, images, text_prompts):
-        # images (B, num_views, 10, h, w), text_prompts (B, 1)
-        b, nv, _, h, w = images.shape
-        rgb_views_images = self.resize(images[:, :, 3:6, :, :].reshape(b*nv, 3, h, w))
-        text_prompts = text_prompts.repeat(nv, axis=1).reshape(b*nv)
-        boxes = (self.batch_predict(rgb_views_images, text_prompts.tolist()))  # (b*nv, K, 4)
-        centers = (boxes[:, :, 0:2]*torch.Tensor([w, h]).to(boxes.device)).int()  # (b*nv, K, 2)
-        all_global_corr = images[:, :, 0:3, :, :].reshape(b*nv, 3, h, w)  # (b*nv, 3, h, w)
-
-        all_center_corr = []
-        for k in range(self.K):
-            # (b*nv, 3)
-            center_corr = all_global_corr[torch.arange(b*nv).reshape(-1, 1), :, centers[:, k, 1:2], centers[:, k, 0:1]]
-            all_center_corr.append(center_corr)
-        all_center_corr = torch.stack(all_center_corr, dim=1)  # (b*nv, K, 3)
-        final_center = self.find_closest_center(all_center_corr.reshape(b, nv, self.K, 3))
-
-        out = {"trans": final_center}
-
-        return out
 
     def feature_fusion(self, image, box):
         # image tensor (3, H, W)
@@ -173,90 +121,14 @@ class GroundingDinoHeatMap(nn.Module):
         return outfeat.to(self.device)
 
     @torch.no_grad()
-    def forward_old_2(self, images, text_prompts):
-        # images (B, num_views, 10, h, w), text_prompts (B, 1)
-        b, nv, _, h, w = images.shape
-        rgb_views_images = self.resize(images[:, :, 3:6, :, :].reshape(b*nv, 3, h, w))
-        text_prompts = text_prompts.repeat(nv, axis=1).reshape(b*nv)
-        boxes = (self.batch_predict(rgb_views_images, text_prompts.tolist()))  # (b*nv, K, 4)
-
-        print("Computing pixel-aligned features...")
-        rgb_views_images = images[:, :, 3:6, :, :]
-        boxes = boxes.reshape(b, nv, self.K, 4)
-        all_hm = []
-        for batch_ind in range(b):
-            text_inputs = clip.tokenize(text_prompts.tolist()[batch_ind]).to(self.device)
-            lang_query = self.clip_model.encode_text(text_inputs)
-            sample_hm = []
-            for view_ind in range(nv):
-                img = rgb_views_images[batch_ind, view_ind]
-                box = boxes[batch_ind, view_ind]
-                # H, W, feature_dim
-                one_view_feature = self.feature_fusion(img, box)
-                # H, W, feature_dim
-                point_wise_query = lang_query.unsqueeze(0).repeat(h, w, 1)
-                # H, W
-                point_wise_sim = self.cosine_similarity(point_wise_query, one_view_feature)
-                point_wise_sim[torch.isnan(point_wise_sim)] = 0.0
-                sample_hm.append(point_wise_sim)
-
-            # nv, H, W
-            all_hm.append(torch.stack(sample_hm, dim=0))
-        # b, nv, H, W
-        all_hm = torch.stack(all_hm, dim=0)
-
-        out = {"trans": all_hm}
-
-        return out
-
-    @torch.no_grad()
-    def forward_old(self, images, text_prompts):
-        if not hasattr(self, 'count'):
-            self.count = 0
-        # images (B, num_views, 10, h, w), text_prompts (B, 1)
-        b, nv, _, h, w = images.shape
-        rgb_views_images = self.resize(images[:, :, 3:6, :, :].reshape(b*nv, 3, h, w))
-        text_prompts = text_prompts.repeat(nv, axis=1).reshape(b*nv)
-        boxes = (self.batch_predict(rgb_views_images, text_prompts.tolist()))  # (b*nv, K, 4)
-
-        boxes_new = boxes.squeeze(1)  # (b*nv, 4)
-
-        boxes_new = (boxes_new * torch.tensor([w, h, w, h]).to(boxes.device)).int()
-
-        rgb_views_images = images[:, :, 3:6, :, :]
-        boxes = boxes.reshape(b, nv, self.K, 4)
-
-        hm = torch.zeros([b, nv, h, w]).cuda()
-        for batch_ind in range(b):
-            for view_ind in range(nv):
-                # image tensor (3, H, W)
-                img = rgb_views_images[batch_ind, view_ind]
-                # box tensor (K, 4)
-                box = boxes[batch_ind, view_ind]
-                img = (img.permute(1, 2, 0).cpu().numpy() * 255.0).astype(np.uint8)
-                box = (box.cpu() * torch.tensor([w, h, w, h])).numpy()
-
-                maskidx = 0
-                annotated_frame = annotate(image_source=img, boxes=(boxes[batch_ind, view_ind, maskidx:maskidx+1]).cpu(),
-                                           logits=torch.tensor([0.0]), phrases=['drawer'])
-                annotated_frame = Image.fromarray(annotated_frame)
-                annotated_frame.save(f'annotated_{self.count}_image_view{view_ind}_mask{maskidx}.jpg')
-
-                hm[batch_ind, view_ind, int(box[0, 1]), int(box[0, 0])] = 1.0
-        self.count += 1
-
-        out = {"trans": hm}
-
-        return out
-
-    @torch.no_grad()
     def forward(self, images, text_prompts):
         # images (B, num_views, 10, h, w), text_prompts (B, 1)
         b, nv, _, h, w = images.shape
         rgb_views_images = self.resize(images[:, :, 3:6, :, :].reshape(b*nv, 3, h, w))
         text_prompts = text_prompts.repeat(nv, axis=1).reshape(b*nv)
-        boxes = (self.batch_predict(rgb_views_images, text_prompts.tolist()))  # (b*nv, K, 4)
+        boxes = (self.batch_predict(rgb_views_images, text_prompts.tolist(), h, w))  # (b*nv, K, 4)
 
+        assert self.K == 1
         boxes = boxes.squeeze(1)  # (b*nv, 4)
 
         boxes = (boxes * torch.tensor([w, h, w, h]).to(boxes.device)).int()
@@ -269,3 +141,17 @@ class GroundingDinoHeatMap(nn.Module):
         out = {"trans": hm}
 
         return out
+
+    @torch.no_grad()
+    def get_predicted_boxes(self, images, text_prompts):
+        # images (B, num_views, 10, h, w), text_prompts (B, 1)
+        b, nv, _, h, w = images.shape
+        rgb_views_images = self.resize(images[:, :, 3:6, :, :].reshape(b*nv, 3, h, w))
+        text_prompts = text_prompts.repeat(nv, axis=1).reshape(b*nv)
+        boxes = (self.batch_predict(rgb_views_images, text_prompts.tolist(), h, w))  # (b*nv, K, 4)
+
+        # (b*nv, K, 4)
+        boxes = (boxes * torch.tensor([w, h, w, h]).to(boxes.device)).int()
+        # # (b, nv, K, 4)
+        boxes = rearrange(boxes, "(b v) ... -> b v ...", b=b, v=nv)
+        return boxes

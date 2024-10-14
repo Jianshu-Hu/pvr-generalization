@@ -44,7 +44,7 @@ from rvt.utils.peract_utils import (
 
 
 # new train takes the dataset as input
-def train(agent, dataset, training_iterations, rank=0):
+def train(agent, dataset, training_iterations, rank=0, verbose=False):
     agent.train()
     log = defaultdict(list)
 
@@ -66,20 +66,19 @@ def train(agent, dataset, training_iterations, rank=0):
         update_args = {
             "step": iteration,
         }
-        eval_log = True
         update_args.update(
             {
                 "replay_sample": batch,
                 "backprop": True,
                 "reset_log": (iteration == 0),
-                "eval_log": eval_log,
+                "eval_log": verbose,
             }
         )
         agent.update(**update_args)
 
     if rank == 0:
         log = print_loss_log(agent)
-        if eval_log:
+        if verbose:
             eval_log = print_eval_log(agent)
 
     return log
@@ -272,7 +271,7 @@ def experiment(rank, cmd_args, devices, port):
             break
 
         print(f"Rank [{rank}], Epoch [{i}]: Training on train dataset")
-        out = train(agent, train_dataset, TRAINING_ITERATIONS, rank)
+        out = train(agent, train_dataset, TRAINING_ITERATIONS, rank, exp_cfg.verbose)
 
         if rank == 0:
             tb.update("train", i, out)

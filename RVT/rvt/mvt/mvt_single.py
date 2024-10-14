@@ -6,6 +6,8 @@ from math import ceil
 
 import torch
 import torch.nn.functional as F
+import torchvision
+import numpy as np
 
 from torch import nn
 from einops import rearrange, repeat
@@ -22,7 +24,7 @@ from rvt.mvt.attn import (
     FixedPositionalEncoding,
 )
 from rvt.mvt.raft_utils import ConvexUpSample
-
+from rvt.mvt.groundingdino_wrapper import GroundingDinoHeatMap
 
 
 class MVT(nn.Module):
@@ -237,12 +239,13 @@ class MVT(nn.Module):
             self.input_preprocess = lambda x: x
             inp_pre_out_dim = inp_img_feat_dim
 
-        if self.pre_image_process:
+        if self.pre_image_process > 0:
             # load pretrained dinov2
             # self.pretrained_image_encoder = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14_reg')
             self.pretrained_image_encoder = torch.hub.load('../../pvr_ckpts/facebookresearch_dinov2_main',
                                                            model='dinov2_vitb14_reg', source='local')
-            print('use pretrained image encoder to preprocess the rgb images')
+            print(f'use pretrained image encoder to preprocess the rgb images'
+                  f' and use type {self.pre_image_process}.')
             self.pretrained_image_encoder.to('cuda')
             self.pretrained_image_encoder.eval()
             for param in self.pretrained_image_encoder.parameters():
@@ -253,24 +256,88 @@ class MVT(nn.Module):
                 output = self.pretrained_image_encoder.forward_features(random_img)
                 feature = output['x_norm_patchtokens']
                 img_emb_dim = feature.size(2)
-            inp_pre_out_dim -= 3
+            if self.pre_image_process == 1:
+                inp_pre_out_dim -= 3
 
-            self.img_compress_fc = DenseBlock(
-                img_emb_dim,
-                int(self.im_channels/2),
-                norm="group",
-                activation=activation,
-            )
+                self.img_compress_fc = DenseBlock(
+                    img_emb_dim,
+                    int(self.im_channels/2),
+                    norm="group",
+                    activation=activation,
+                )
 
-            self.patchify = Conv2DBlock(
-                inp_pre_out_dim,
-                int(self.im_channels/2),
-                kernel_sizes=self.img_patch_size,
-                strides=self.img_patch_size,
-                norm="group",
-                activation=activation,
-                padding=0,
-            )
+                self.patchify = Conv2DBlock(
+                    inp_pre_out_dim,
+                    int(self.im_channels/2),
+                    kernel_sizes=self.img_patch_size,
+                    strides=self.img_patch_size,
+                    norm="group",
+                    activation=activation,
+                    padding=0,
+                )
+            elif self.pre_image_process == 2:
+                self.patchify = Conv2DBlock(
+                    self.num_img*img_emb_dim,
+                    self.im_channels,
+                    kernel_sizes=self.img_patch_size,
+                    strides=self.img_patch_size,
+                    norm="group",
+                    activation=activation,
+                    padding=0,
+                )
+            elif self.pre_image_process == 3:
+                # from sam2.sam2_image_predictor import SAM2ImagePredictor
+                # self.sam_predictor = SAM2ImagePredictor.from_pretrained("facebook/sam2-hiera-small")
+
+                # with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+                #     predictor.set_image( < your_image >)
+                #     masks, _, _ = predictor.predict( < input_prompts >)
+
+                self.grounding_heat_map = GroundingDinoHeatMap()
+                print('Use grounding dino for extracting features.')
+                self.resize = torchvision.transforms.Resize([self.img_size, self.img_size])
+
+                self.img_compress_fc = DenseBlock(
+                    self.num_img*(img_emb_dim+4),
+                    self.im_channels,
+                    norm="group",
+                    activation=activation,
+                )
+
+                self.patch_upsample_fc = DenseBlock(
+                    int(self.grounding_heat_map.K*self.im_channels),
+                    int(spatial_size*spatial_size*self.im_channels),
+                    norm="group",
+                    activation=activation,
+                )
+            elif self.pre_image_process == 4:
+                self.grounding_heat_map = GroundingDinoHeatMap()
+                print('Use grounding dino for extracting features.')
+                self.resize = torchvision.transforms.Resize([self.img_size, self.img_size])
+
+                if self.pe_fix:
+                    num_pe_token = self.grounding_heat_map.K * self.num_img
+                else:
+                    num_pe_token = lang_max_seq_len + (self.grounding_heat_map.K * self.num_img)
+                self.pos_encoding = nn.Parameter(
+                    torch.randn(
+                        1,
+                        num_pe_token,
+                        self.input_dim_before_seq,
+                    )
+                )
+                self.img_compress_fc = DenseBlock(
+                    self.num_img*(img_emb_dim+4),
+                    self.im_channels,
+                    norm="group",
+                    activation=activation,
+                )
+
+                self.patch_up_conv = ConvexUpSample(
+                    in_dim=self.input_dim_before_seq,
+                    out_dim=self.input_dim_before_seq,
+                    up_ratio=spatial_size,
+                )
         else:
             self.patchify = Conv2DBlock(
                 inp_pre_out_dim,
@@ -451,16 +518,20 @@ class MVT(nn.Module):
     def forward(
         self,
         img,
+        pc,
         proprio=None,
         lang_emb=None,
+        lang_goal=None,
         wpt_local=None,
         rot_x_y=None,
         **kwargs,
     ):
         """
         :param img: tensor of shape (bs, num_img, img_feat_dim, h, w)
+        :param pc: list of tensors, each tensor of shape (num_points, 3)
         :param proprio: tensor of shape (bs, priprio_dim)
         :param lang_emb: tensor of shape (bs, lang_len, lang_dim)
+        :param lang_goal: (bs, 1), language goal
         :param img_aug: (float) magnitude of augmentation in rgb image
         :param rot_x_y: (bs, 2)
         """
@@ -476,7 +547,7 @@ class MVT(nn.Module):
         # (bs * num_img, im_channels, h, w)
         d0 = self.input_preprocess(img)
 
-        if self.pre_image_process:
+        if self.pre_image_process == 1:
             # process the RGB image with pretrained image encoder
             with torch.no_grad():
                 # for now, we only consider the situation of combining (corr, rgbd, xyz)
@@ -508,6 +579,314 @@ class MVT(nn.Module):
             ins = torch.concat((ins_rgb, ins_others), dim=2)
             # (bs, im_channel, num_img, num_p, num_p)
             ins = ins.transpose(1, 2)
+        elif self.pre_image_process == 2:
+            # process the RGB image with pretrained image encoder
+            with torch.no_grad():
+                # for now, we only consider the situation of combining (corr, rgbd, xyz)
+                assert d0.size(1) == 10
+                # (bs * num_img, 3, h, w)
+                rgb_views_image = d0[:, 3:6, :, :]
+                # (bs, num_img, 3, h, w)
+                corr = d0[:, 0:3, :, :].reshape(bs, num_img, 3, h, w)
+                # (bs * num_img, num_p*num_p, d)
+                processed_image_patches = (self.pretrained_image_encoder.forward_features(
+                    rgb_views_image))['x_norm_patchtokens']
+                # (bs * num_img * num_p*num_p, d)
+                processed_image_patches = processed_image_patches.reshape(-1, processed_image_patches.size(-1))
+                # (bs, num_img, num_p, num_p, d)
+                processed_image_patches = rearrange(processed_image_patches, "(b n p1 p2) ... -> b n p1 p2 ...",
+                                                    b=bs, n=num_img, p1=num_pat_img, p2=num_pat_img)
+
+                # map global corr to image loc
+                # (bs, num_img*h*w, num_img, 2)
+                img_loc = self.get_pt_loc_on_img(rearrange(corr, "b n x h w-> b (n h w) x"), dyn_cam_info=None)
+                img_loc = torch.where(img_loc < 0, 0, img_loc)
+                img_loc = torch.where(img_loc >= h, h-1, img_loc)
+                # (num_img*h*w, bs, num_img, 2)
+                img_patch_loc = (img_loc//self.img_patch_size).to(torch.int).permute(1, 0, 2, 3)
+
+                # get pixel-wise feature according to image loc
+                bs_ind = torch.arange(bs).unsqueeze(1).repeat(1, num_img)
+                num_img_ind = torch.arange(num_img).unsqueeze(0).repeat(bs, 1)
+                # (num_img*h*w, bs, num_img, d)
+                lifted_3d_img_feature = processed_image_patches[bs_ind, num_img_ind,
+                                                                img_patch_loc[:, :, :, 0], img_patch_loc[:, :, :, 1], :]
+                # (num_img*h*w, bs, num_img*d)
+                lifted_3d_img_feature = lifted_3d_img_feature.reshape(num_img*h*w, bs, -1)
+                # (bs*num_img, num_img*d, h, w)
+                lifted_3d_img_feature = rearrange(lifted_3d_img_feature, "(n h w) b d -> (b n) d h w",
+                                                  n=num_img, h=h, w=w)
+                # # (num_img*h*w, bs, d)
+                # lifted_3d_img_feature = torch.mean(lifted_3d_img_feature, dim=2)
+                # # (bs*num_img, d, h, w)
+                # lifted_3d_img_feature = rearrange(lifted_3d_img_feature, "(n h w) b d -> (b n) d h w",
+                #                                   n=num_img, h=h, w=w)
+
+            # (bs*num_img, im_channel, num_p, num_p)
+            ins = self.patchify(lifted_3d_img_feature)
+            # (bs, num_img, im_channel, num_p, num_p)
+            ins = rearrange(ins, "(b n) ... -> b n ...", b=bs, n=num_img)
+            # (bs, im_channel, num_img, num_p, num_p)
+            ins = ins.transpose(1, 2)
+        elif self.pre_image_process == 3:
+            # # use sam for detecting masks for each view
+            # with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+            #     self.sam_predictor.set_image(d0[:, 3:6, :, :])
+            #     masks, _, _ = self.sam_predictor.predict()
+
+            rgb_views_image = d0[:, 3:6, :, :].reshape(bs, self.num_img, 3, h, w)
+            # use grounding-dino for detecting bounding box for each view
+            boxes = self.grounding_heat_map.get_predicted_boxes(
+                d0.reshape(bs, self.num_img, img_feat_dim, h, w), lang_goal)  # (bs, num_image, K, 4)
+            # from cxcywh boxes to xywh boxes
+            boxes_x = torch.clip((boxes[:, :, :, 0] - boxes[:, :, :, 2] / 2), min=0)
+            boxes_y = torch.clip((boxes[:, :, :, 1] - boxes[:, :, :, 3] / 2), min=0)
+            boxes = torch.stack([boxes_x, boxes_y, boxes[:, :, :, 2], boxes[:, :, :, 3]], dim=-1).to(torch.int)
+            K = boxes.size(2)  # num_boxes
+
+            # method 1 : use corr to find the 3d boxes
+            # (bs, num_img, 3, h, w)
+            corr = d0[:, 0:3, :, :].reshape(bs, self.num_img, 3, h, w)
+
+            # np.save('test/test_roi/rgb_images.npy', rgb_views_image.detach().cpu().numpy())
+            # np.save('test/test_roi/boxes.npy', boxes.detach().cpu().numpy())
+            # np.save('test/test_roi/corr.npy', corr.detach().cpu().numpy())
+            # pc_numpy = [pc_sample.detach().cpu().numpy() for pc_sample in pc]
+            # np.save('test/test_roi/pc.npy', pc_numpy)
+
+            # raise ValueError('save files')
+
+            all_roi_img = []
+            all_roi_boxes = []
+            # the number of points in each sample are different, so we need a for loop to process each sample
+            for i in range(boxes.size(0)):
+                view_pc_index = []
+                for view in range(self.num_img):
+                    pc_index = []
+                    for k in range(K):
+                        _x, _y, _w, _h = tuple(boxes[i, view, k])  # xywh bounding box
+                        assert _w > 1
+                        assert _h > 1
+                        # TODO: (method 2: considering the canonical view, directly extend the 2d box to 3d box.)
+                        corr_local = (corr[i, view, :, _y:_y + _h, _x:_x + _w]).reshape(3, -1).transpose(0, 1)
+                        # filter those pixels whose corr can not be rendered and are thus set to zero.
+                        corr_filter = (corr_local[:, 0] == 0) & (corr_local[:, 1] == 0) & (corr_local[:, 2] == 0)
+                        corr_local = corr_local[~corr_filter]
+                        if corr_local.size(0) == 0:
+                            max_xyz = torch.zeros(3).to(corr_local.device)
+                            min_xyz = torch.zeros(3).to(corr_local.device)
+                        else:
+                            max_xyz = torch.max(corr_local, dim=0)[0]
+                            min_xyz = torch.min(corr_local, dim=0)[0]
+                        if view == 0:
+                            # z-axis is free
+                            pc_index.append((min_xyz[0] <= pc[i][:, 0]) & (pc[i][:, 0] <= max_xyz[0]) &
+                                            (min_xyz[1] <= pc[i][:, 1]) & (pc[i][:, 1] <= max_xyz[1]))
+                        elif view == 1:
+                            # x-axis is free
+                            pc_index.append((min_xyz[1] <= pc[i][:, 1]) & (pc[i][:, 1] <= max_xyz[1]) &
+                                            (min_xyz[2] <= pc[i][:, 2]) & (pc[i][:, 2] <= max_xyz[2]))
+                        else:
+                            # y-axis is free
+                            pc_index.append((min_xyz[0] <= pc[i][:, 0]) & (pc[i][:, 0] <= max_xyz[0]) &
+                                            (min_xyz[2] <= pc[i][:, 2]) & (pc[i][:, 2] <= max_xyz[2]))
+                    # (K, num_pc_points)
+                    view_pc_index.append(torch.stack(pc_index))
+                # (num_image, K, num_pc_points)
+                view_pc_index = torch.stack(view_pc_index)
+                view_pc_index = torch.where(view_pc_index, 1.0, -1.0)
+
+                sim_score_0_1 = (view_pc_index[0] @ view_pc_index[1].transpose(0, 1)) / view_pc_index.size(2)
+                sim_score_0_2 = (view_pc_index[0] @ view_pc_index[2].transpose(0, 1)) / view_pc_index.size(2)
+                sim_score_1_2 = (view_pc_index[1] @ view_pc_index[2].transpose(0, 1)) / view_pc_index.size(2)
+
+                def get_roi_img(all_index):
+                    all_roi_img = []
+                    all_roi_boxes = []
+                    for k in range(view_pc_index.size(1)):
+                        view_roi_img = []
+                        view_roi_box = []
+                        for view in range(len(all_index)):
+                            # single view roi image
+                            _x, _y, _w, _h = tuple(boxes[i, view, all_index[view][k]])  # xywh bounding box
+                            view_roi_img.append(self.resize(rgb_views_image[i, view, :, _y:_y+_h, _x:_x+_w]))
+                            view_roi_box.append(torch.tensor([_x/w, _y/h, _w/w, _h/h]).to(boxes.device))
+                        all_roi_img.append(torch.stack(view_roi_img))
+                        all_roi_boxes.append(torch.stack(view_roi_box))
+                    # (K, num_img, 3, h, w) and (K, num_img, 4)
+                    return torch.stack(all_roi_img), torch.stack(all_roi_boxes)
+
+                roi_img_one_sample = []
+                roi_box_one_sample = []
+
+                index_all = []
+                # view-0
+                index_0 = torch.arange(view_pc_index.size(1)).to(view_pc_index.device)
+                index_1 = torch.argmax(sim_score_0_1, dim=-1)
+                index_2 = torch.argmax(sim_score_0_2, dim=-1)
+                index_all.append([index_0, index_1, index_2])
+
+                # view-1
+                index_0 = torch.argmax(sim_score_0_1.transpose(0, 1), dim=-1)
+                index_1 = torch.arange(view_pc_index.size(1)).to(view_pc_index.device)
+                index_2 = torch.argmax(sim_score_1_2, dim=-1)
+                index_all.append([index_0, index_1, index_2])
+
+
+                # view-2
+                index_0 = torch.argmax(sim_score_0_2.transpose(0, 1), dim=-1)
+                index_1 = torch.argmax(sim_score_1_2.transpose(0, 1), dim=-1)
+                index_2 = torch.arange(view_pc_index.size(1)).to(view_pc_index.device)
+                index_all.append([index_0, index_1, index_2])
+
+                for view in range(num_img):
+                    roi_img, roi_box = get_roi_img(index_all[view])
+                    roi_img_one_sample.append(roi_img)
+                    roi_box_one_sample.append(roi_box)
+
+                # TODO: currently, we have num_img*K objects/3D boxes. Filter them because there are repeated objects.
+                # (num_img, K, num_img, 3, h, w)
+                all_roi_img.append(torch.stack(roi_img_one_sample))
+                # (num_img, K, num_img, 4)
+                all_roi_boxes.append(torch.stack(roi_box_one_sample))
+
+            # (bs*num_img*K*num_img, 3, h, w)
+            all_roi_img = torch.stack(all_roi_img).reshape(-1, 3, h, w)
+            # (bs*num_img*K*num_img, 4)
+            all_roi_boxes = torch.stack(all_roi_boxes).reshape(-1, 4)
+
+            # (bs*num_img*K*num_img, feat_dim)
+            roi_feature = self.pretrained_image_encoder.forward_features(all_roi_img)['x_norm_clstoken']
+            feature = torch.concat((roi_feature, all_roi_boxes), dim=-1)
+            # (bs*num_img*K, num_img*feat_dim)
+            ins = rearrange(feature, '(b n) d -> b (n d)', n=num_img)
+            # (bs*num_img, K*im_channels)
+            ins = rearrange(self.img_compress_fc(ins), '(b k) d -> b (k d)', k=self.grounding_heat_map.K)
+            # (bs*num_img, np*np*im_channels)
+            ins = self.patch_upsample_fc(ins)
+            # (bs, im_channels, num_img, np, np)
+            ins = rearrange(ins, '(b n) (p1 p2 d)->b d n p1 p2', b=bs, p1=num_pat_img, p2=num_pat_img)
+        elif self.pre_image_process == 4:
+            rgb_views_image = d0[:, 3:6, :, :].reshape(bs, self.num_img, 3, h, w)
+            # use grounding-dino for detecting bounding box for each view
+            boxes = self.grounding_heat_map.get_predicted_boxes(
+                d0.reshape(bs, self.num_img, img_feat_dim, h, w), lang_goal)  # (bs, num_image, K, 4)
+            # from cxcywh boxes to xywh boxes
+            boxes_x = torch.clip((boxes[:, :, :, 0] - boxes[:, :, :, 2] / 2), min=0)
+            boxes_y = torch.clip((boxes[:, :, :, 1] - boxes[:, :, :, 3] / 2), min=0)
+            boxes = torch.stack([boxes_x, boxes_y, boxes[:, :, :, 2], boxes[:, :, :, 3]], dim=-1).to(torch.int)
+            K = boxes.size(2)  # num_boxes
+
+            # method 1 : use corr to find the 3d boxes
+            # (bs, num_img, 3, h, w)
+            corr = d0[:, 0:3, :, :].reshape(bs, self.num_img, 3, h, w)
+
+            all_roi_img = []
+            all_roi_boxes = []
+            # the number of points in each sample are different, so we need a for loop to process each sample
+            for i in range(boxes.size(0)):
+                view_pc_index = []
+                for view in range(self.num_img):
+                    pc_index = []
+                    for k in range(K):
+                        _x, _y, _w, _h = tuple(boxes[i, view, k])  # xywh bounding box
+                        assert _w > 1
+                        assert _h > 1
+                        # TODO: (method 2: considering the canonical view, directly extend the 2d box to 3d box.)
+                        corr_local = (corr[i, view, :, _y:_y + _h, _x:_x + _w]).reshape(3, -1).transpose(0, 1)
+                        # filter those pixels whose corr can not be rendered and are thus set to zero.
+                        corr_filter = (corr_local[:, 0] == 0) & (corr_local[:, 1] == 0) & (corr_local[:, 2] == 0)
+                        corr_local = corr_local[~corr_filter]
+                        if corr_local.size(0) == 0:
+                            max_xyz = torch.zeros(3).to(corr_local.device)
+                            min_xyz = torch.zeros(3).to(corr_local.device)
+                        else:
+                            max_xyz = torch.max(corr_local, dim=0)[0]
+                            min_xyz = torch.min(corr_local, dim=0)[0]
+                        if view == 0:
+                            # z-axis is free
+                            pc_index.append((min_xyz[0] <= pc[i][:, 0]) & (pc[i][:, 0] <= max_xyz[0]) &
+                                            (min_xyz[1] <= pc[i][:, 1]) & (pc[i][:, 1] <= max_xyz[1]))
+                        elif view == 1:
+                            # x-axis is free
+                            pc_index.append((min_xyz[1] <= pc[i][:, 1]) & (pc[i][:, 1] <= max_xyz[1]) &
+                                            (min_xyz[2] <= pc[i][:, 2]) & (pc[i][:, 2] <= max_xyz[2]))
+                        else:
+                            # y-axis is free
+                            pc_index.append((min_xyz[0] <= pc[i][:, 0]) & (pc[i][:, 0] <= max_xyz[0]) &
+                                            (min_xyz[2] <= pc[i][:, 2]) & (pc[i][:, 2] <= max_xyz[2]))
+                    # (K, num_pc_points)
+                    view_pc_index.append(torch.stack(pc_index))
+                # (num_image, K, num_pc_points)
+                view_pc_index = torch.stack(view_pc_index)
+                view_pc_index = torch.where(view_pc_index, 1.0, -1.0)
+
+                sim_score_0_1 = (view_pc_index[0] @ view_pc_index[1].transpose(0, 1)) / view_pc_index.size(2)
+                sim_score_0_2 = (view_pc_index[0] @ view_pc_index[2].transpose(0, 1)) / view_pc_index.size(2)
+                sim_score_1_2 = (view_pc_index[1] @ view_pc_index[2].transpose(0, 1)) / view_pc_index.size(2)
+
+                def get_roi_img(all_index):
+                    all_roi_img = []
+                    all_roi_boxes = []
+                    for k in range(view_pc_index.size(1)):
+                        view_roi_img = []
+                        view_roi_box = []
+                        for view in range(len(all_index)):
+                            # single view roi image
+                            _x, _y, _w, _h = tuple(boxes[i, view, all_index[view][k]])  # xywh bounding box
+                            view_roi_img.append(self.resize(rgb_views_image[i, view, :, _y:_y + _h, _x:_x + _w]))
+                            view_roi_box.append(torch.tensor([_x / w, _y / h, _w / w, _h / h]).to(boxes.device))
+                        all_roi_img.append(torch.stack(view_roi_img))
+                        all_roi_boxes.append(torch.stack(view_roi_box))
+                    # (K, num_img, 3, h, w) and (K, num_img, 4)
+                    return torch.stack(all_roi_img), torch.stack(all_roi_boxes)
+
+                roi_img_one_sample = []
+                roi_box_one_sample = []
+
+                index_all = []
+                # view-0
+                index_0 = torch.arange(view_pc_index.size(1)).to(view_pc_index.device)
+                index_1 = torch.argmax(sim_score_0_1, dim=-1)
+                index_2 = torch.argmax(sim_score_0_2, dim=-1)
+                index_all.append([index_0, index_1, index_2])
+
+                # view-1
+                index_0 = torch.argmax(sim_score_0_1.transpose(0, 1), dim=-1)
+                index_1 = torch.arange(view_pc_index.size(1)).to(view_pc_index.device)
+                index_2 = torch.argmax(sim_score_1_2, dim=-1)
+                index_all.append([index_0, index_1, index_2])
+
+                # view-2
+                index_0 = torch.argmax(sim_score_0_2.transpose(0, 1), dim=-1)
+                index_1 = torch.argmax(sim_score_1_2.transpose(0, 1), dim=-1)
+                index_2 = torch.arange(view_pc_index.size(1)).to(view_pc_index.device)
+                index_all.append([index_0, index_1, index_2])
+
+                for view in range(num_img):
+                    roi_img, roi_box = get_roi_img(index_all[view])
+                    roi_img_one_sample.append(roi_img)
+                    roi_box_one_sample.append(roi_box)
+
+                # TODO: currently, we have num_img*K objects/3D boxes. Filter them because there are repeated objects.
+                # (num_img, K, num_img, 3, h, w)
+                all_roi_img.append(torch.stack(roi_img_one_sample))
+                # (num_img, K, num_img, 4)
+                all_roi_boxes.append(torch.stack(roi_box_one_sample))
+
+            # (bs*num_img*K*num_img, 3, h, w)
+            all_roi_img = torch.stack(all_roi_img).reshape(-1, 3, h, w)
+            # (bs*num_img*K*num_img, 4)
+            all_roi_boxes = torch.stack(all_roi_boxes).reshape(-1, 4)
+
+            # (bs*num_img*K*num_img, feat_dim)
+            roi_feature = self.pretrained_image_encoder.forward_features(all_roi_img)['x_norm_clstoken']
+            feature = torch.concat((roi_feature, all_roi_boxes), dim=-1)
+            # (bs*num_img*K, num_img*feat_dim)
+            ins = rearrange(feature, '(b n) d -> b (n d)', n=num_img)
+            # (bs, im_channels, num_img, K)
+            ins = rearrange(self.img_compress_fc(ins), '(b nv k) d -> b d nv k',
+                            b=bs, nv=num_img, k=self.grounding_heat_map.K)
         else:
             # (bs * num_img, im_channels, h, w) ->
             # (bs * num_img, im_channels, h / img_patch_strid, w / img_patch_strid) patches
@@ -525,95 +904,183 @@ class MVT(nn.Module):
                 .clone()
             )
 
-        # concat proprio
-        _, _, _d, _h, _w = ins.shape
-        if self.add_proprio:
-            p = self.proprio_preprocess(proprio)  # [B,4] -> [B,64]
-            p = p.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).repeat(1, 1, _d, _h, _w)
-            ins = torch.cat([ins, p], dim=1)  # [B, 128, num_img, np, np]
+        if self.pre_image_process == 4:
+            # concat proprio
+            if self.add_proprio:
+                p = self.proprio_preprocess(proprio)  # [B,4] -> [B,64]
+                p = p.unsqueeze(-1).unsqueeze(-1).repeat(1, 1, num_img, K)
+                ins = torch.cat([ins, p], dim=1)  # [B, 128, num_img, K]
 
-        # channel last
-        ins = rearrange(ins, "b d ... -> b ... d")  # [B, num_img, np, np, 128]
+            # channel last
+            ins = rearrange(ins, "b d ... -> b ... d")  # [B, num_img, K, 128]
 
-        # save original shape of input for layer
-        ins_orig_shape = ins.shape
+            # save original shape of input for layer
+            ins_orig_shape = ins.shape
 
-        # flatten patches into sequence
-        ins = rearrange(ins, "b ... d -> b (...) d")  # [B, num_img * np * np, 128]
-        # add learable pos encoding
-        # only added to image tokens
-        if self.pe_fix:
-            ins += self.pos_encoding
+            # flatten patches into sequence
+            ins = rearrange(ins, "b ... d -> b (...) d")  # [B, num_img * K, 128]
 
-        # append language features as sequence
-        num_lang_tok = 0
-        if self.add_lang:
-            l = self.lang_preprocess(
-                lang_emb.view(bs * self.lang_max_seq_len, self.lang_emb_dim)
-            )
-            l = l.view(bs, self.lang_max_seq_len, -1)
-            num_lang_tok = l.shape[1]
-            ins = torch.cat((l, ins), dim=1)  # [B, num_img * np * np + 77, 128]
+            # add learable pos encoding
+            # only added to image tokens
+            if self.pe_fix:
+                ins += self.pos_encoding
 
-        # add learable pos encoding
-        if not self.pe_fix:
-            ins = ins + self.pos_encoding
+            # append language features as sequence
+            num_lang_tok = 0
+            if self.add_lang:
+                l = self.lang_preprocess(
+                    lang_emb.view(bs * self.lang_max_seq_len, self.lang_emb_dim)
+                )
+                l = l.view(bs, self.lang_max_seq_len, -1)
+                num_lang_tok = l.shape[1]
+                ins = torch.cat((l, ins), dim=1)  # [B, num_img * K + 77, 128]
 
-        x = self.fc_bef_attn(ins)
-        if self.self_cross_ver == 0:
-            # self-attention layers
-            for self_attn, self_ff in self.layers:
-                x = self_attn(x) + x
-                x = self_ff(x) + x
+            # add learnable pos encoding
+            if not self.pe_fix:
+                ins = ins + self.pos_encoding
 
-        elif self.self_cross_ver == 1:
-            lx, imgx = x[:, :num_lang_tok], x[:, num_lang_tok:]
+            x = self.fc_bef_attn(ins)
+            if self.self_cross_ver == 0:
+                # self-attention layers
+                for self_attn, self_ff in self.layers:
+                    x = self_attn(x) + x
+                    x = self_ff(x) + x
 
-            # within image self attention
-            imgx = imgx.reshape(bs * num_img, num_pat_img * num_pat_img, -1)
-            for self_attn, self_ff in self.layers[: len(self.layers) // 2]:
-                imgx = self_attn(imgx) + imgx
-                imgx = self_ff(imgx) + imgx
+            elif self.self_cross_ver == 1:
+                lx, imgx = x[:, :num_lang_tok], x[:, num_lang_tok:]
 
-            imgx = imgx.view(bs, num_img * num_pat_img * num_pat_img, -1)
-            x = torch.cat((lx, imgx), dim=1)
-            # cross attention
-            for self_attn, self_ff in self.layers[len(self.layers) // 2 :]:
-                x = self_attn(x) + x
-                x = self_ff(x) + x
-        elif self.self_cross_ver == 2:
-            assert self.pre_image_process
-            # we do not need within image self attention
+                # within image self attention
+                imgx = imgx.reshape(bs * num_img, K, -1)
+                for self_attn, self_ff in self.layers[: len(self.layers) // 2]:
+                    imgx = self_attn(imgx) + imgx
+                    imgx = self_ff(imgx) + imgx
 
-            # cross attention
-            for self_attn, self_ff in self.layers[len(self.layers) // 2 :]:
-                x = self_attn(x) + x
-                x = self_ff(x) + x
+                imgx = imgx.view(bs, num_img * K, -1)
+                x = torch.cat((lx, imgx), dim=1)
+                # cross attention
+                for self_attn, self_ff in self.layers[len(self.layers) // 2:]:
+                    x = self_attn(x) + x
+                    x = self_ff(x) + x
+            elif self.self_cross_ver == 2:
+                assert self.pre_image_process > 0
+                # we do not need within image self attention
+
+                # cross attention
+                for self_attn, self_ff in self.layers[len(self.layers) // 2:]:
+                    x = self_attn(x) + x
+                    x = self_ff(x) + x
+            else:
+                assert False
+
+            # append language features as sequence
+            if self.add_lang:
+                # throwing away the language embeddings
+                x = x[:, num_lang_tok:]
+            x = self.fc_aft_attn(x)
+
+            # reshape back to original size
+            x = x.view(bs, *ins_orig_shape[1:-1], x.shape[-1])  # [B, num_img, K, 128]
+            x = rearrange(x, "b ... d -> b d ...")  # [B, 128, num_img, K]
+
+            feat = []
+            _feat = torch.max(x, dim=-1)[0]
+            _feat = _feat.view(bs, -1)
+            feat.append(_feat)
+
+            # (bs*num_img, 128, num_pat_img, num_pat_img)
+            x = self.patch_up_conv(_feat.clone().unsqueeze(-1).unsqueeze(-1).transpose(1, 2)
+                                   .view(bs * self.num_img, self.input_dim_before_seq, 1, 1))
         else:
-            assert False
+            # concat proprio
+            _, _, _d, _h, _w = ins.shape
+            if self.add_proprio:
+                p = self.proprio_preprocess(proprio)  # [B,4] -> [B,64]
+                p = p.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).repeat(1, 1, _d, _h, _w)
+                ins = torch.cat([ins, p], dim=1)  # [B, 128, num_img, np, np]
 
-        # append language features as sequence
-        if self.add_lang:
-            # throwing away the language embeddings
-            x = x[:, num_lang_tok:]
-        x = self.fc_aft_attn(x)
+            # channel last
+            ins = rearrange(ins, "b d ... -> b ... d")  # [B, num_img, np, np, 128]
 
-        # reshape back to orginal size
-        x = x.view(bs, *ins_orig_shape[1:-1], x.shape[-1])  # [B, num_img, np, np, 128]
-        x = rearrange(x, "b ... d -> b d ...")  # [B, 128, num_img, np, np]
+            # save original shape of input for layer
+            ins_orig_shape = ins.shape
 
-        feat = []
-        _feat = torch.max(torch.max(x, dim=-1)[0], dim=-1)[0]
-        _feat = _feat.view(bs, -1)
-        feat.append(_feat)
+            # flatten patches into sequence
+            ins = rearrange(ins, "b ... d -> b (...) d")  # [B, num_img * np * np, 128]
 
-        x = (
-            x.transpose(1, 2)
-            .clone()
-            .view(
-                bs * self.num_img, self.input_dim_before_seq, num_pat_img, num_pat_img
+            # add learable pos encoding
+            # only added to image tokens
+            if self.pe_fix:
+                ins += self.pos_encoding
+
+            # append language features as sequence
+            num_lang_tok = 0
+            if self.add_lang:
+                l = self.lang_preprocess(
+                    lang_emb.view(bs * self.lang_max_seq_len, self.lang_emb_dim)
+                )
+                l = l.view(bs, self.lang_max_seq_len, -1)
+                num_lang_tok = l.shape[1]
+                ins = torch.cat((l, ins), dim=1)  # [B, num_img * np * np + 77, 128]
+
+            # add learnable pos encoding
+            if not self.pe_fix:
+                ins = ins + self.pos_encoding
+
+            x = self.fc_bef_attn(ins)
+            if self.self_cross_ver == 0:
+                # self-attention layers
+                for self_attn, self_ff in self.layers:
+                    x = self_attn(x) + x
+                    x = self_ff(x) + x
+
+            elif self.self_cross_ver == 1:
+                lx, imgx = x[:, :num_lang_tok], x[:, num_lang_tok:]
+
+                # within image self attention
+                imgx = imgx.reshape(bs * num_img, num_pat_img * num_pat_img, -1)
+                for self_attn, self_ff in self.layers[: len(self.layers) // 2]:
+                    imgx = self_attn(imgx) + imgx
+                    imgx = self_ff(imgx) + imgx
+
+                imgx = imgx.view(bs, num_img * num_pat_img * num_pat_img, -1)
+                x = torch.cat((lx, imgx), dim=1)
+                # cross attention
+                for self_attn, self_ff in self.layers[len(self.layers) // 2 :]:
+                    x = self_attn(x) + x
+                    x = self_ff(x) + x
+            elif self.self_cross_ver == 2:
+                assert self.pre_image_process > 0
+                # we do not need within image self attention
+
+                # cross attention
+                for self_attn, self_ff in self.layers[len(self.layers) // 2 :]:
+                    x = self_attn(x) + x
+                    x = self_ff(x) + x
+            else:
+                assert False
+
+            # append language features as sequence
+            if self.add_lang:
+                # throwing away the language embeddings
+                x = x[:, num_lang_tok:]
+            x = self.fc_aft_attn(x)
+
+            # reshape back to original size
+            x = x.view(bs, *ins_orig_shape[1:-1], x.shape[-1])  # [B, num_img, np, np, 128]
+            x = rearrange(x, "b ... d -> b d ...")  # [B, 128, num_img, np, np]
+
+            feat = []
+            _feat = torch.max(torch.max(x, dim=-1)[0], dim=-1)[0]
+            _feat = _feat.view(bs, -1)
+            feat.append(_feat)
+
+            x = (
+                x.transpose(1, 2)
+                .clone()
+                .view(
+                    bs * self.num_img, self.input_dim_before_seq, num_pat_img, num_pat_img
+                )
             )
-        )
         if self.cvx_up:
             trans = self.up0(x)
             trans = trans.view(bs, self.num_img, h, w)

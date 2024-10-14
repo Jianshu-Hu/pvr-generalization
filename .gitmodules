@@ -25,3 +25,6 @@
 [submodule "RVT/rvt/libs/YARR"]
 	path = RVT/rvt/libs/YARR
 	url = https://github.com/Jianshu-Hu/YARR.git
+[submodule "sam2"]
+	path = sam2
+	url = https://github.com/facebookresearch/sam2.git

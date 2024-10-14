@@ -46,7 +46,7 @@ _C.st_sca = 4
 _C.st_wpt_loc_aug = 0.05
 _C.st_wpt_loc_inp_no_noise = False
 _C.img_aug_2 = 0.0
-_C.pre_image_process = False
+_C.pre_image_process = 0
 _C.pre_heat_map = False
 
 

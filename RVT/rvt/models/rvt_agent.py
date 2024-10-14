@@ -818,8 +818,9 @@ class RVTAgent:
                 "collision_loss": collision_loss.item(),
                 "lr": self._optimizer.param_groups[0]["lr"],
             }
-            if step % 1000 == 0:
-                pprint.pprint(loss_log)
+            if eval_log:
+                if step % 100 == 0:
+                    pprint.pprint(loss_log)
             manage_loss_log(self, loss_log, reset_log=reset_log)
             return_out.update(loss_log)
 
@@ -849,7 +850,7 @@ class RVTAgent:
                     collision_q=collision_q,
                     reset_log=reset_log,
                 )
-                if step % 1000 == 0:
+                if step % 100 == 0:
                     mean_eval_log = {key: sum(val)/len(val) for key, val in return_log.items()}
                     pprint.pprint(mean_eval_log)
 

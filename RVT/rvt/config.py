@@ -18,6 +18,7 @@ _C.num_workers = 0
 # 'transition_uniform' or 'task_uniform'
 _C.sample_distribution_mode = 'transition_uniform'
 _C.train_iter = 16 * 10000
+_C.verbose = False
 
 # arguments present in both peract and rvt
 # some of them donot support every possible combination in peract

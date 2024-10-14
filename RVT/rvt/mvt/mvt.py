@@ -417,8 +417,10 @@ class MVT(nn.Module):
         else:
             out = self.mvt1(
                 img=img,
+                pc=pc,
                 proprio=proprio,
                 lang_emb=lang_emb,
+                lang_goal=lang_goal,
                 wpt_local=wpt_local_stage_one,
                 rot_x_y=rot_x_y,
                 **kwargs,
@@ -477,8 +479,10 @@ class MVT(nn.Module):
 
             out_mvt2 = self.mvt2(
                 img=img,
+                pc=pc,
                 proprio=proprio,
                 lang_emb=lang_emb,
+                lang_goal=lang_goal,
                 wpt_local=wpt_local2,
                 rot_x_y=rot_x_y,
                 **kwargs,
