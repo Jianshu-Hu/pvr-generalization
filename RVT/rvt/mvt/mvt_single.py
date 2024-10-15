@@ -338,6 +338,24 @@ class MVT(nn.Module):
                     out_dim=self.input_dim_before_seq,
                     up_ratio=spatial_size,
                 )
+            elif self.pre_image_process == 5:
+                self.grounding_heat_map = GroundingDinoHeatMap()
+                print('Use grounding dino for extracting features.')
+                self.resize = torchvision.transforms.Resize([self.img_size, self.img_size])
+
+                self.img_compress_fc = DenseBlock(
+                    self.num_img*(img_emb_dim+4),
+                    self.im_channels,
+                    norm="group",
+                    activation=activation,
+                )
+
+                self.patch_upsample_fc = DenseBlock(
+                    int(self.grounding_heat_map.K*self.im_channels),
+                    int(spatial_size*spatial_size*self.im_channels),
+                    norm="group",
+                    activation=activation,
+                )
         else:
             self.patchify = Conv2DBlock(
                 inp_pre_out_dim,
@@ -887,6 +905,141 @@ class MVT(nn.Module):
             # (bs, im_channels, num_img, K)
             ins = rearrange(self.img_compress_fc(ins), '(b nv k) d -> b d nv k',
                             b=bs, nv=num_img, k=self.grounding_heat_map.K)
+        elif self.pre_image_process == 5:
+            # # use sam for detecting masks for each view
+            # with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+            #     self.sam_predictor.set_image(d0[:, 3:6, :, :])
+            #     masks, _, _ = self.sam_predictor.predict()
+
+            rgb_views_image = d0[:, 3:6, :, :].reshape(bs, self.num_img, 3, h, w)
+            # use grounding-dino for detecting bounding box for each view
+            boxes = self.grounding_heat_map.get_predicted_boxes(
+                d0.reshape(bs, self.num_img, img_feat_dim, h, w), lang_goal)  # (bs, num_image, K, 4
+            # from cxcywh boxes to xywh boxes
+            boxes_x = torch.clip((boxes[:, :, :, 0] - boxes[:, :, :, 2] / 2), min=0)
+            boxes_y = torch.clip((boxes[:, :, :, 1] - boxes[:, :, :, 3] / 2), min=0)
+            boxes = torch.stack([boxes_x, boxes_y, boxes[:, :, :, 2], boxes[:, :, :, 3]], dim=-1).to(torch.int)
+            K = boxes.size(2)  # num_boxes
+
+            # method 1 : use corr to find the 3d boxes
+            # (bs, num_img, 3, h, w)
+            corr = d0[:, 0:3, :, :].reshape(bs, self.num_img, 3, h, w)
+
+            import os
+            if not os.path.exists('test/test_roi/d0.npy'):
+                np.save('test/test_roi/d0.npy', d0.detach().cpu().numpy())
+                np.save('test/test_roi/boxes.npy', boxes.detach().cpu().numpy())
+                # np.save('test/test_roi/corr.npy', corr.detach().cpu().numpy())
+                pc_numpy = [pc_sample.detach().cpu().numpy() for pc_sample in pc]
+                np.save('test/test_roi/pc.npy', pc_numpy)
+                np.save('test/test_roi/lang_goal.npy', lang_goal)
+                print('save statistics')
+
+            # (bs*num_img, np * np, feat_dim)
+            patch_feature = self.pretrained_image_encoder.forward_features(d0[:, 3:6, :, :])['x_norm_patchtokens']
+            patch_feature = rearrange(patch_feature, 'b (n1 n2) d-> b d n1 n2', n1=num_pat_img)
+
+            all_roi_boxes = []
+            # the number of points in each sample are different, so we need a for loop to process each sample
+            for i in range(boxes.size(0)):
+                view_pc_index = []
+                for view in range(self.num_img):
+                    pc_index = []
+                    for k in range(K):
+                        _x, _y, _w, _h = tuple(boxes[i, view, k])  # xywh bounding box
+                        assert _w > 1
+                        assert _h > 1
+                        # TODO: (method 2: considering the canonical view, directly extend the 2d box to 3d box.)
+                        corr_local = (corr[i, view, :, _y:_y + _h, _x:_x + _w]).reshape(3, -1).transpose(0, 1)
+                        # filter those pixels whose corr can not be rendered and are thus set to zero.
+                        corr_filter = (corr_local[:, 0] == 0) & (corr_local[:, 1] == 0) & (corr_local[:, 2] == 0)
+                        corr_local = corr_local[~corr_filter]
+                        if corr_local.size(0) == 0:
+                            max_xyz = torch.zeros(3).to(corr_local.device)
+                            min_xyz = torch.zeros(3).to(corr_local.device)
+                        else:
+                            max_xyz = torch.max(corr_local, dim=0)[0]
+                            min_xyz = torch.min(corr_local, dim=0)[0]
+                        if view == 0:
+                            # z-axis is free
+                            pc_index.append((min_xyz[0] <= pc[i][:, 0]) & (pc[i][:, 0] <= max_xyz[0]) &
+                                            (min_xyz[1] <= pc[i][:, 1]) & (pc[i][:, 1] <= max_xyz[1]))
+                        elif view == 1:
+                            # x-axis is free
+                            pc_index.append((min_xyz[1] <= pc[i][:, 1]) & (pc[i][:, 1] <= max_xyz[1]) &
+                                            (min_xyz[2] <= pc[i][:, 2]) & (pc[i][:, 2] <= max_xyz[2]))
+                        else:
+                            # y-axis is free
+                            pc_index.append((min_xyz[0] <= pc[i][:, 0]) & (pc[i][:, 0] <= max_xyz[0]) &
+                                            (min_xyz[2] <= pc[i][:, 2]) & (pc[i][:, 2] <= max_xyz[2]))
+                    # (K, num_pc_points)
+                    view_pc_index.append(torch.stack(pc_index))
+                # (num_image, K, num_pc_points)
+                view_pc_index = torch.stack(view_pc_index)
+                view_pc_index = torch.where(view_pc_index, 1.0, -1.0)
+
+                sim_score_0_1 = (view_pc_index[0] @ view_pc_index[1].transpose(0, 1)) / view_pc_index.size(2)
+                sim_score_0_2 = (view_pc_index[0] @ view_pc_index[2].transpose(0, 1)) / view_pc_index.size(2)
+                sim_score_1_2 = (view_pc_index[1] @ view_pc_index[2].transpose(0, 1)) / view_pc_index.size(2)
+
+                def get_roi_img(all_index):
+                    all_roi_boxes = []
+                    for k in range(view_pc_index.size(1)):
+                        view_roi_box = []
+                        for view in range(len(all_index)):
+                            # single view roi image
+                            _x, _y, _w, _h = tuple(boxes[i, view, all_index[view][k]])  # xywh bounding box
+                            view_roi_box.append(torch.tensor([i*view+view, _x, _y, _x+_w, _y+_h]).to(boxes.device))
+                        all_roi_boxes.append(torch.stack(view_roi_box))
+                    # (K, num_img, 5)
+                    return torch.stack(all_roi_boxes)
+
+                roi_box_one_sample = []
+
+                index_all = []
+                # view-0
+                index_0 = torch.arange(view_pc_index.size(1)).to(view_pc_index.device)
+                index_1 = torch.argmax(sim_score_0_1, dim=-1)
+                index_2 = torch.argmax(sim_score_0_2, dim=-1)
+                index_all.append([index_0, index_1, index_2])
+
+                # view-1
+                index_0 = torch.argmax(sim_score_0_1.transpose(0, 1), dim=-1)
+                index_1 = torch.arange(view_pc_index.size(1)).to(view_pc_index.device)
+                index_2 = torch.argmax(sim_score_1_2, dim=-1)
+                index_all.append([index_0, index_1, index_2])
+
+
+                # view-2
+                index_0 = torch.argmax(sim_score_0_2.transpose(0, 1), dim=-1)
+                index_1 = torch.argmax(sim_score_1_2.transpose(0, 1), dim=-1)
+                index_2 = torch.arange(view_pc_index.size(1)).to(view_pc_index.device)
+                index_all.append([index_0, index_1, index_2])
+
+                for view in range(num_img):
+                    roi_box = get_roi_img(index_all[view])
+                    roi_box_one_sample.append(roi_box)
+
+                # TODO: currently, we have num_img*K objects/3D boxes. Filter them because there are repeated objects.
+                # (num_img, K, num_img, 5)
+                all_roi_boxes.append(torch.stack(roi_box_one_sample))
+
+            # (bs*num_img*K*num_img, 5)
+            all_roi_boxes = torch.stack(all_roi_boxes).reshape(-1, 5)
+
+            # (bs*num_img*K*num_img, feat_dim, 1, 1)
+            roi_feature = torchvision.ops.roi_align(patch_feature, all_roi_boxes.to(torch.float), output_size=1)
+            roi_feature = roi_feature.squeeze(-1).squeeze(-1)
+            feature = torch.cat([roi_feature,
+                                 all_roi_boxes[:, 1:]/torch.tensor([w, h, w, h]).to(roi_feature.device)], dim=-1)
+            # (bs*num_img*K, num_img*feat_dim)
+            ins = rearrange(feature, '(b n) d -> b (n d)', n=num_img)
+            # (bs*num_img, K*im_channels)
+            ins = rearrange(self.img_compress_fc(ins), '(b k) d -> b (k d)', k=self.grounding_heat_map.K)
+            # (bs*num_img, np*np*im_channels)
+            ins = self.patch_upsample_fc(ins)
+            # (bs, im_channels, num_img, np, np)
+            ins = rearrange(ins, '(b n) (p1 p2 d)->b d n p1 p2', b=bs, p1=num_pat_img, p2=num_pat_img)
         else:
             # (bs * num_img, im_channels, h, w) ->
             # (bs * num_img, im_channels, h / img_patch_strid, w / img_patch_strid) patches
