@@ -3,6 +3,8 @@
 # Licensed under the NVIDIA Source Code License [see LICENSE for details].
 
 import copy
+import os.path
+
 import torch
 import numpy as np
 
@@ -82,7 +84,7 @@ class MVT(nn.Module):
         :param pre_image_process: use a pretrained image encoder to preprocess the RGB images
             from different views
         :param pre_heat_map: use a pretrained grounding-dino to preprocess the RGB images to find the roi
-            in each view as the heat map
+            in each view to crop the pc
         """
         super().__init__()
 
@@ -401,7 +403,31 @@ class MVT(nn.Module):
                 mvt1_or_mvt2=True,
                 dyn_cam_info=None,
             )
-            # np.save('test/test_img.npy', img.detach().cpu().numpy())
+            # if not os.path.exists('test/test_roi/img_before.npy'):
+            #     np.save('test/test_roi/img_before.npy', img.detach().cpu().numpy())
+            if self.pre_heat_map:
+                # if not hasattr(self, 'grounding_heat_map'):
+                #     self.grounding_heat_map = GroundingDinoHeatMap()
+                #     print('Use grounding dino for extracting roi.')
+                if self.training:
+                    hm = self.grounding_heat_map(img, lang_goal)
+                else:
+                    hm = self.grounding_heat_map(img, np.array([[lang_goal]]))
+                # (bs*2, 3)
+                box_global_point = self.get_wpt(
+                    hm, y_q=None, mvt1_or_mvt2=True,
+                    dyn_cam_info=None,
+                )
+                pc, img_feat = self.grounding_heat_map.filter_pc(box_global_point, pc, img_feat)
+                img = self.render(
+                    pc=pc,
+                    img_feat=img_feat,
+                    img_aug=img_aug,
+                    mvt1_or_mvt2=True,
+                    dyn_cam_info=None,
+                )
+                # if not os.path.exists('test/test_roi/img_after.npy'):
+                #     np.save('test/test_roi/img_after.npy', img.detach().cpu().numpy())
 
         if self.training:
             wpt_local_stage_one = wpt_local
@@ -409,22 +435,15 @@ class MVT(nn.Module):
         else:
             wpt_local_stage_one = wpt_local
 
-        if self.pre_heat_map:
-            if self.training:
-                out = self.grounding_heat_map(img, lang_goal)
-            else:
-                out = self.grounding_heat_map(img, np.array([[lang_goal]]))
-        else:
-            out = self.mvt1(
-                img=img,
-                pc=pc,
-                proprio=proprio,
-                lang_emb=lang_emb,
-                lang_goal=lang_goal,
-                wpt_local=wpt_local_stage_one,
-                rot_x_y=rot_x_y,
-                **kwargs,
-            )
+        out = self.mvt1(
+            img=img,
+            proprio=proprio,
+            lang_emb=lang_emb,
+            lang_goal=lang_goal,
+            wpt_local=wpt_local_stage_one,
+            rot_x_y=rot_x_y,
+            **kwargs,
+        )
 
         if self.stage_two:
             with torch.no_grad():
@@ -432,12 +451,6 @@ class MVT(nn.Module):
                 if self.training:
                     # noise is added so that the wpt_local2 is not exactly at
                     # the center of the pc
-                    if self.pre_heat_map:
-                        # bs, 3
-                        wpt_local_stage_one = self.get_wpt(
-                            out, y_q=None, mvt1_or_mvt2=True,
-                            dyn_cam_info=None,
-                        )
                     wpt_local_stage_one_noisy = mvt_utils.add_uni_noi(
                         wpt_local_stage_one.clone().detach(), 2 * self.st_wpt_loc_aug
                     )
@@ -479,7 +492,6 @@ class MVT(nn.Module):
 
             out_mvt2 = self.mvt2(
                 img=img,
-                pc=pc,
                 proprio=proprio,
                 lang_emb=lang_emb,
                 lang_goal=lang_goal,

@@ -121,11 +121,66 @@ class GroundingDinoHeatMap(nn.Module):
         return outfeat.to(self.device)
 
     @torch.no_grad()
-    def forward(self, images, text_prompts):
+    def get_predicted_boxes(self, images, text_prompts):
+        # get the 3D box which can include the roi in the scene
+        # images (B, num_views, 10, h, w), text_prompts (B, 1)
+        b, nv, _, h, w = images.shape
+        assert h == w
+        rgb_views_images = self.resize(images[:, :, 3:6, :, :].reshape(b*nv, 3, h, w))
+        text_prompts = text_prompts.repeat(nv, axis=1).reshape(b*nv)
+        boxes = (self.batch_predict(rgb_views_images, text_prompts.tolist(), h, w))  # (b*nv, K, 4)
+
+        # (b*nv, K, 4)
+        boxes = (boxes * torch.tensor([w, h, w, h]).to(boxes.device)).int()
+        # # (b, nv, K, 4)
+        boxes = rearrange(boxes, "(b v) ... -> b v ...", b=b, v=nv)
+
+        # from cxcywh boxes to xyxy boxes and find the smallest common box
+        boxes_x = torch.clip((boxes[:, :, :, 0] - boxes[:, :, :, 2] / 2), min=0)
+        boxes_y = torch.clip((boxes[:, :, :, 1] - boxes[:, :, :, 3] / 2), min=0)
+        boxes_x1 = torch.clip(boxes_x + boxes[:, :, :, 2], max=h - 1)
+        boxes_y1 = torch.clip(boxes_y + boxes[:, :, :, 3], max=h - 1)
+        boxes_x_min = torch.min(boxes_x, dim=-1)[0]
+        boxes_y_min = torch.min(boxes_y, dim=-1)[0]
+        boxes_x_max = torch.max(boxes_x1, dim=-1)[0]
+        boxes_y_max = torch.max(boxes_y1, dim=-1)[0]
+        # (bs, num_img, 4)
+        boxes = torch.stack([boxes_x_min, boxes_y_min, boxes_x_max, boxes_y_max], dim=-1).to(torch.int)
+
+        # find the 3D common boxes:
+        # compare view 0 view 1
+        min_y0_x1 = torch.min(torch.stack((boxes[:, 0, 1], h - 1 - boxes[:, 1, 2]), dim=-1), dim=-1)[0]
+        boxes[:, 0, 1] = min_y0_x1
+        boxes[:, 1, 2] = h - 1 - min_y0_x1
+        max_y1_x0 = torch.max(torch.stack((boxes[:, 0, 3], h - 1 - boxes[:, 1, 0]), dim=-1), dim=-1)[0]
+        boxes[:, 0, 3] = max_y1_x0
+        boxes[:, 1, 0] = h - 1 - max_y1_x0
+        # compare view 0 view 2
+        min_x0_x1 = torch.min(torch.stack((boxes[:, 0, 0], h - 1 - boxes[:, 2, 2]), dim=-1), dim=-1)[0]
+        boxes[:, 0, 0] = min_x0_x1
+        boxes[:, 2, 2] = h - 1 - min_x0_x1
+        max_x1_x0 = torch.max(torch.stack((boxes[:, 0, 2], h - 1 - boxes[:, 2, 0]), dim=-1), dim=-1)[0]
+        boxes[:, 0, 2] = max_x1_x0
+        boxes[:, 2, 0] = h - 1 - max_x1_x0
+        # compare view 1 view 2
+        min_y0 = torch.min(torch.stack((boxes[:, 1, 1], boxes[:, 2, 1]), dim=-1), dim=-1)[0]
+        boxes[:, 1, 1] = min_y0
+        boxes[:, 2, 1] = min_y0
+        max_y1 = torch.max(torch.stack((boxes[:, 1, 3], boxes[:, 2, 3]), dim=-1), dim=-1)[0]
+        boxes[:, 1, 3] = max_y1
+        boxes[:, 2, 3] = max_y1
+
+        # (bs*num_img, 4)
+        boxes = rearrange(boxes, 'b nv ... -> (b nv) ...')
+        return boxes
+
+    @torch.no_grad()
+    def forward_old(self, images, text_prompts):
         # images (B, num_views, 10, h, w), text_prompts (B, 1)
         b, nv, _, h, w = images.shape
         rgb_views_images = self.resize(images[:, :, 3:6, :, :].reshape(b*nv, 3, h, w))
         text_prompts = text_prompts.repeat(nv, axis=1).reshape(b*nv)
+        # cxcy
         boxes = (self.batch_predict(rgb_views_images, text_prompts.tolist(), h, w))  # (b*nv, K, 4)
 
         assert self.K == 1
@@ -143,15 +198,53 @@ class GroundingDinoHeatMap(nn.Module):
         return out
 
     @torch.no_grad()
-    def get_predicted_boxes(self, images, text_prompts):
+    def forward(self, images, text_prompts):
         # images (B, num_views, 10, h, w), text_prompts (B, 1)
         b, nv, _, h, w = images.shape
-        rgb_views_images = self.resize(images[:, :, 3:6, :, :].reshape(b*nv, 3, h, w))
-        text_prompts = text_prompts.repeat(nv, axis=1).reshape(b*nv)
-        boxes = (self.batch_predict(rgb_views_images, text_prompts.tolist(), h, w))  # (b*nv, K, 4)
+        # (bs, num_img, 4) xyxy
+        boxes = self.get_predicted_boxes(images, text_prompts).reshape(b, nv, 4)
 
-        # (b*nv, K, 4)
-        boxes = (boxes * torch.tensor([w, h, w, h]).to(boxes.device)).int()
-        # # (b, nv, K, 4)
-        boxes = rearrange(boxes, "(b v) ... -> b v ...", b=b, v=nv)
-        return boxes
+        # (bs, 2)
+        # x0y1
+        view_0_min = torch.stack([boxes[:, 0, 0], boxes[:, 0, 3]], dim=-1)
+        # x1y0
+        view_0_max = torch.stack([boxes[:, 0, 2], boxes[:, 0, 1]], dim=-1)
+        # x0y1
+        view_1_min = torch.stack([boxes[:, 1, 0], boxes[:, 1, 3]], dim=-1)
+        # x1y0
+        view_1_max = torch.stack([boxes[:, 1, 2], boxes[:, 1, 1]], dim=-1)
+        # x1y1
+        view_2_min = torch.stack([boxes[:, 2, 2], boxes[:, 2, 3]], dim=-1)
+        # x0y0
+        view_2_max = torch.stack([boxes[:, 2, 0], boxes[:, 2, 1]], dim=-1)
+
+        # (bs, 3, 2)
+        point_min_img = torch.stack([view_0_min, view_1_min, view_2_min], dim=1)
+        point_max_img = torch.stack([view_0_max, view_1_max, view_2_max], dim=1)
+        point_img = rearrange(torch.stack([point_min_img, point_max_img], dim=1), 'b x nv p->(b x nv) p')
+
+        hm = torch.zeros([b*2*nv, h, w]).cuda()
+        hm[torch.arange(hm.size(0)), point_img[:, 1], point_img[:, 0]] = 1.0
+        # (bs*2, 3, h, w)
+        hm = hm.reshape(b*2, nv, h, w)
+
+        out = {"trans": hm}
+
+        return out
+
+    def filter_pc(self, box_global_point, pc, img_feat):
+        b = len(pc)
+        # (b*2, 3)
+        box_global_point = rearrange(box_global_point, '(b x) p-> b x p', b=b, x=2)
+        xyz_max = box_global_point[:, 1]
+        xyz_min = box_global_point[:, 0]
+
+        pc_new = []
+        img_feat_new = []
+        for i in range(b):
+            # (num_point)
+            within_range = (torch.sum(pc[i] >= xyz_min[i], dim=-1) == 3) & (torch.sum(pc[i] <= xyz_max[i], dim=-1) == 3)
+            pc_new.append(pc[i][within_range])
+            img_feat_new.append(img_feat[i][within_range])
+        return pc_new, img_feat_new
+

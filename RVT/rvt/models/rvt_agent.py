@@ -299,7 +299,6 @@ class RVTAgent:
         rot_x_y_aug: int = 2,
         log_dir="",
         pc_aug: bool = False,
-        pre_heat_map: bool = False
     ):
         """
         :param gt_hm_sigma: the std of the groundtruth hm, currently for for
@@ -313,9 +312,6 @@ class RVTAgent:
             much error we should add to groundtruth rotation while training
         :param log_dir: a folder location for saving some intermediate data
         :param pc_aug: augment the point cloud with point cloud from other object
-
-        :param pre_heat_map: use a pretrained grounding-dino to preprocess the RGB images to find the roi
-            in each view as the heat map
         """
 
         self._network = network
@@ -362,7 +358,6 @@ class RVTAgent:
         self.scaler = GradScaler(enabled=self.amp)
 
         self.pc_aug = pc_aug
-        self.pre_heat_map = pre_heat_map
 
     def build(self, training: bool, device: torch.device = None):
         self._training = training
@@ -751,12 +746,7 @@ class RVTAgent:
         if backprop:
             with autocast(enabled=self.amp):
                 # cross-entropy loss
-                if self.pre_heat_map:
-                    # mvt1 is not updated
-                    _nc = int(q_trans.size(2)/2)
-                    trans_loss = self._cross_entropy_loss(q_trans[:, :, _nc:], action_trans[:, :, _nc:]).mean()
-                else:
-                    trans_loss = self._cross_entropy_loss(q_trans, action_trans).mean()
+                trans_loss = self._cross_entropy_loss(q_trans, action_trans).mean()
                 rot_loss_x = rot_loss_y = rot_loss_z = 0.0
                 grip_loss = 0.0
                 collision_loss = 0.0
