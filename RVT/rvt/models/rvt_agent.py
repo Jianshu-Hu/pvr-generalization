@@ -298,7 +298,6 @@ class RVTAgent:
         rot_ver: int = 0,
         rot_x_y_aug: int = 2,
         log_dir="",
-        pc_aug: bool = False,
     ):
         """
         :param gt_hm_sigma: the std of the groundtruth hm, currently for for
@@ -311,7 +310,6 @@ class RVTAgent:
         :param rot_x_y_aug: only applicable when rot_ver is 1, it specifies how
             much error we should add to groundtruth rotation while training
         :param log_dir: a folder location for saving some intermediate data
-        :param pc_aug: augment the point cloud with point cloud from other object
         """
 
         self._network = network
@@ -356,8 +354,6 @@ class RVTAgent:
         self.num_all_rot = self._num_rotation_classes * 3
 
         self.scaler = GradScaler(enabled=self.amp)
-
-        self.pc_aug = pc_aug
 
     def build(self, training: bool, device: torch.device = None):
         self._training = training
@@ -404,12 +400,6 @@ class RVTAgent:
             total_epoch=self.warmup_steps,
             after_scheduler=after_scheduler,
         )
-
-        if self.pc_aug:
-            if training:
-                # build pc dataset
-                self.pc_dataset, self.img_feature_dataset = self.build_pc_dataset()
-                print('Build point cloud data set for pc augmentation')
 
     def load_clip(self):
         self.clip_model, self.clip_preprocess = clip.load("RN50", device=self._device)
@@ -533,48 +523,6 @@ class RVTAgent:
 
         return q_trans, rot_q, grip_q, collision_q, y_q, pts
 
-    def build_pc_dataset(self):
-        dataset_size = 1000
-        scale = 5
-        num_point = 10000
-        dataset_dir = '/bd_byta6000i0/users/jhu/modelnet/ModelNet40'
-        all_types = os.listdir(dataset_dir)
-
-        pc_dataset = []
-        img_feature_dataset = []
-        i = 0
-        while i < dataset_size:
-            obj_dir = os.path.join(dataset_dir, random.choice(all_types), 'train')
-            all_obj_dir = os.listdir(obj_dir)
-            dir = os.path.join(obj_dir, random.choice(all_obj_dir))
-            add_obj_mesh = trimesh.load(dir)
-            add_obj_pc = torch.tensor(add_obj_mesh.sample(num_point)).float()
-            add_obj_pc_max = torch.max(add_obj_pc, dim=0)[0]
-            add_obj_pc_min = torch.min(add_obj_pc, dim=0)[0]
-            if torch.sum((add_obj_pc_max - add_obj_pc_min) == 0) > 0:
-                print(f"skip the object in {dir}")
-            else:
-                pc = ((add_obj_pc - add_obj_pc_min) / (add_obj_pc_max - add_obj_pc_min) * 2 - 1) / scale
-                img_feature = torch.randn(1, 3).repeat(num_point, 1)
-                pc_dataset.append(pc)
-                img_feature_dataset.append(img_feature)
-                i += 1
-        return pc_dataset, img_feature_dataset
-
-    def load_obj_pc(self, device):
-        pc = random.choice(self.pc_dataset)
-        img_feature = random.choice(self.img_feature_dataset)
-
-        # TODO: add augmentation to the pc
-        # shift the pc
-        shift = [0.6, -0.6]
-        pc[:, 0] = pc[:, 0]+random.choice(shift)+0.1*(torch.rand(1)*2-1)
-        pc[:, 1] = pc[:, 1]+random.choice(shift)+0.1*(torch.rand(1)*2-1)
-        pc[:, 2] = pc[:, 2]-0.2+0.1*(torch.rand(1)*2-1)
-        # pc = pc.unsqueeze(0).repeat(batch_size, 1, 1)
-        # img_feature = img_feature.squeeze(0).repeat(batch_size, 1, 1)
-
-        return pc.to(device), img_feature.to(device)
 
     def update(
         self,
@@ -705,23 +653,6 @@ class RVTAgent:
                         -self.rot_x_y_aug, self.rot_x_y_aug, size=rot_x_y.shape
                     ).to(rot_x_y.device)
                     rot_x_y %= self._num_rotation_classes
-
-            if self.pc_aug:
-                new_pc = []
-                new_img_feat = []
-                for (_pc, _img_feat) in zip(pc, img_feat):
-                    if random.uniform(0, 1) < 0.3:
-                        # load pc from additional dataset
-                        add_obj_pc, add_obj_img_feature = self.load_obj_pc(pc[0].device)  # number_point, 3
-                        # combine the dataset by simply concat them
-                        # TODO:better way to combine two point cloud
-                        new_pc.append(torch.cat([_pc, add_obj_pc], dim=0))
-                        new_img_feat.append(torch.cat([_img_feat, add_obj_img_feature], dim=0))
-                    else:
-                        new_pc.append(_pc)
-                        new_img_feat.append(_img_feat)
-                pc = new_pc
-                img_feat = new_img_feat
 
             out = self._network(
                 pc=pc,

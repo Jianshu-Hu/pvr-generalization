@@ -319,8 +319,6 @@ class MVT(nn.Module):
                     padding=0,
                 )
             elif self.pre_image_process == 5:
-                self.resize = torchvision.transforms.Resize([self.img_size, self.img_size])
-
                 self.img_compress_fc = DenseBlock(
                     img_emb_dim*2,
                     int(self.im_channels/2),
@@ -331,6 +329,23 @@ class MVT(nn.Module):
                 self.patchify = Conv2DBlock(
                     inp_pre_out_dim,
                     int(self.im_channels/2),
+                    kernel_sizes=self.img_patch_size,
+                    strides=self.img_patch_size,
+                    norm="group",
+                    activation=activation,
+                    padding=0,
+                )
+            elif self.pre_image_process == 6:
+                self.img_compress_fc = DenseBlock(
+                    img_emb_dim*2,
+                    int(self.im_channels),
+                    norm="group",
+                    activation=activation,
+                )
+                inp_pre_out_dim -= 4
+                self.patchify = Conv2DBlock(
+                    inp_pre_out_dim,
+                    int(self.im_channels),
                     kernel_sizes=self.img_patch_size,
                     strides=self.img_patch_size,
                     norm="group",
@@ -777,6 +792,34 @@ class MVT(nn.Module):
                                                     '(b n) d p1 p2->b d n p1 p2', b=bs, n=num_img)
             # (bs, im_channels, num_img, np, np)
             ins = torch.cat((ins, processed_remaining_patches), dim=1)
+        elif self.pre_image_process == 6:
+            # (bs * num_img, 3, h, w)
+            rgb_views_image = d0[:, 3:6, :, :]
+            # (bs * num_img, 3, h, w)
+            depth_views_image = d0[:, 6:7, :, :].expand(-1, 3, -1, -1)
+            # (bs * num_img, 6, h, w)
+            pos_info = torch.cat((d0[:, 0:3, :, :], d0[:, 7:, :, :]), dim=1)
+
+            # (bs * num_img, num_p*num_p, d)
+            processed_image_patches = (self.pretrained_image_encoder.forward_features(
+                rgb_views_image))['x_norm_patchtokens']
+            # (bs * num_img, num_p*num_p, d)
+            processed_depth_patches = (self.pretrained_image_encoder.forward_features(
+                depth_views_image))['x_norm_patchtokens']
+            # (bs*num_img, im_channel/2, num_p, num_p)
+            processed_pos_emb = self.patchify(pos_info)
+
+            # (bs * num_img * num_p * num_p, d)
+            ins = rearrange(torch.cat((processed_image_patches, processed_depth_patches), dim=-1), 'b p d -> (b p) d')
+            # (bs*num_img*num_p*num_p, im_channels)
+            ins = self.img_compress_fc(ins)
+            # (bs, im_channels, num_img, np, np)
+            ins = rearrange(ins, '(b n p1 p2) d->b d n p1 p2', b=bs, n=num_img, p1=num_pat_img, p2=num_pat_img)
+
+            # (bs, im_channels, num_img, np, np)
+            processed_pos_emb = rearrange(processed_pos_emb, '(b n) d p1 p2->b d n p1 p2', b=bs, n=num_img)
+            # (bs, im_channels, num_img, np, np)
+            ins = ins+processed_pos_emb
         else:
             # (bs * num_img, im_channels, h, w) ->
             # (bs * num_img, im_channels, h / img_patch_strid, w / img_patch_strid) patches

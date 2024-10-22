@@ -9,6 +9,9 @@ import numpy as np
 from PIL import Image
 import clip
 from einops import rearrange, repeat
+import random
+import trimesh
+import open3d as o3d
 
 
 class GroundingDinoHeatMap(nn.Module):
@@ -31,6 +34,10 @@ class GroundingDinoHeatMap(nn.Module):
         self.clip_model.eval()
 
         self.cosine_similarity = torch.nn.CosineSimilarity(dim=-1, eps=1e-08)
+
+        # build pc dataset during first forward
+        self.dataset_size = None
+        self.pc_dataset, self.img_feature_dataset = None, None
 
     def batch_predict(self, image: torch.Tensor, captions: List, h: int, w: int):
         captions = list(map(preprocess_caption, captions))
@@ -232,19 +239,84 @@ class GroundingDinoHeatMap(nn.Module):
 
         return out
 
+    def build_pc_dataset(self):
+        sample_rate = 20
+        dataset_dir = '/bd_byta6000i0/users/jhu/YCB_dataset/models/ycb/'
+        all_types = os.listdir(dataset_dir)
+
+        pc_dataset = []
+        img_feature_dataset = []
+        for i in range(len(all_types)):
+            if str(all_types[i]).endswith('cups'):
+                continue
+            obj_path = os.path.join(dataset_dir, all_types[i], 'clouds/merged_cloud.ply')
+            if not os.path.exists(obj_path):
+                continue
+            pcd = o3d.io.read_point_cloud(obj_path)
+
+            # Apply uniform downsampling
+            downsampled_pcd = pcd.uniform_down_sample(sample_rate)
+
+            points = torch.tensor(np.asarray(downsampled_pcd.points)).float()  # Extract the point coordinates
+            colors = torch.tensor(np.asarray(downsampled_pcd.colors)).float()  # Extract the colors
+
+            # normalize
+            points_max = torch.max(points, dim=0)[0]
+            points_min = torch.min(points, dim=0)[0]
+            scale = torch.max(points_max)
+            # if torch.sum((add_obj_pc_max - add_obj_pc_min) == 0) > 0:
+            #     print(f"skip the object in {dir}")
+            # else:
+            pc = ((points - points_min) / scale * 2 - 1)
+            pc_dataset.append(pc)
+            img_feature_dataset.append(colors)
+        print('finish loading the object point cloud dataset')
+        self.dataset_size = len(pc_dataset)
+        return pc_dataset, img_feature_dataset
+
     def filter_pc(self, box_global_point, pc, img_feat):
+        if self.pc_dataset is None:
+            # build pc dataset
+            self.pc_dataset, self.img_feature_dataset = self.build_pc_dataset()
+            print('Build point cloud data set for pc augmentation')
+
         b = len(pc)
-        # (b*2, 3)
+        # (b, 2, 3)
         box_global_point = rearrange(box_global_point, '(b x) p-> b x p', b=b, x=2)
         xyz_max = box_global_point[:, 1]
         xyz_min = box_global_point[:, 0]
 
+        # obj size range from 0.1 to 0.4
+        obj_size = 0.25+(torch.rand(b, 1).to(box_global_point.device)*2-1)*0.15
+        obj_size = obj_size.repeat(1, 3)
+        obj_pos = torch.rand(b, 3).to(box_global_point.device)*2-1
+        obj_max = obj_pos+obj_size/2
+        obj_min = obj_pos-obj_size/2
+        # Check for overlap in the x, y, z dimension
+        valid_obj = torch.logical_or(torch.sum(xyz_max <= obj_min, dim=-1) > 0,
+                                     torch.sum(obj_max <= xyz_min, dim=-1) > 0)
+        obj_ind = torch.randint(low=0, high=self.dataset_size, size=(b, )).to(valid_obj.device)
+
         pc_new = []
         img_feat_new = []
         for i in range(b):
-            # (num_point)
-            within_range = (torch.sum(pc[i] >= xyz_min[i], dim=-1) == 3) & (torch.sum(pc[i] <= xyz_max[i], dim=-1) == 3)
-            pc_new.append(pc[i][within_range])
-            img_feat_new.append(img_feat[i][within_range])
+            if valid_obj[i]:
+                obj_pc = self.pc_dataset[obj_ind[i]].to(obj_size.device)*obj_size[i]
+                obj_img_feature = self.img_feature_dataset[obj_ind[i]].to(obj_ind.device)
+
+                # TODO: add augmentation to the pc
+                # shift the pc
+                obj_pc = obj_pc+obj_pos[i]
+                crop_out_of_space_points = torch.logical_and(torch.sum(obj_pc <= 1.0, dim=-1) == 3,
+                                                             torch.sum(obj_pc >= -1.0, dim=-1) == 3)
+                obj_pc = obj_pc[crop_out_of_space_points]
+                obj_img_feature = obj_img_feature[crop_out_of_space_points]
+
+                # TODO:better way to combine two point cloud
+                pc_new.append(torch.cat([pc[i], obj_pc], dim=0))
+                img_feat_new.append(torch.cat([img_feat[i], obj_img_feature], dim=0))
+            else:
+                pc_new.append(pc[i])
+                img_feat_new.append(img_feat[i])
         return pc_new, img_feat_new
 

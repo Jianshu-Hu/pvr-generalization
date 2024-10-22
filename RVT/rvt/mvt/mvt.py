@@ -4,6 +4,7 @@
 
 import copy
 import os.path
+import random
 
 import torch
 import numpy as np
@@ -84,7 +85,7 @@ class MVT(nn.Module):
         :param pre_image_process: use a pretrained image encoder to preprocess the RGB images
             from different views
         :param pre_heat_map: use a pretrained grounding-dino to preprocess the RGB images to find the roi
-            in each view to crop the pc
+            in each view to augment the pc
         """
         super().__init__()
 
@@ -403,22 +404,18 @@ class MVT(nn.Module):
                 mvt1_or_mvt2=True,
                 dyn_cam_info=None,
             )
-            # if not os.path.exists('test/test_roi/img_before.npy'):
-            #     np.save('test/test_roi/img_before.npy', img.detach().cpu().numpy())
-            if self.pre_heat_map:
-                # if not hasattr(self, 'grounding_heat_map'):
-                #     self.grounding_heat_map = GroundingDinoHeatMap()
-                #     print('Use grounding dino for extracting roi.')
-                if self.training:
-                    hm = self.grounding_heat_map(img, lang_goal)
-                else:
-                    hm = self.grounding_heat_map(img, np.array([[lang_goal]]))
+            if not os.path.exists('test/test_roi/img_before.npy'):
+                np.save('test/test_roi/img_before.npy', img.detach().cpu().numpy())
+            if self.pre_heat_map and self.training:
+                hm = self.grounding_heat_map(img, lang_goal)
                 # (bs*2, 3)
                 box_global_point = self.get_wpt(
                     hm, y_q=None, mvt1_or_mvt2=True,
                     dyn_cam_info=None,
                 )
+
                 pc, img_feat = self.grounding_heat_map.filter_pc(box_global_point, pc, img_feat)
+
                 img = self.render(
                     pc=pc,
                     img_feat=img_feat,
@@ -426,8 +423,8 @@ class MVT(nn.Module):
                     mvt1_or_mvt2=True,
                     dyn_cam_info=None,
                 )
-                # if not os.path.exists('test/test_roi/img_after.npy'):
-                #     np.save('test/test_roi/img_after.npy', img.detach().cpu().numpy())
+                if not os.path.exists('test/test_roi/img_after.npy'):
+                    np.save('test/test_roi/img_after.npy', img.detach().cpu().numpy())
 
         if self.training:
             wpt_local_stage_one = wpt_local

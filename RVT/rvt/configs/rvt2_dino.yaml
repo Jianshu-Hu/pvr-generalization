@@ -19,4 +19,3 @@ peract:
 rvt:
   place_with_mean: False
   img_aug: 0.0
-  pc_aug: False
