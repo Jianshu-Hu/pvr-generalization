@@ -404,8 +404,14 @@ class MVT(nn.Module):
                 mvt1_or_mvt2=True,
                 dyn_cam_info=None,
             )
-            if not os.path.exists('test/test_roi/img_before.npy'):
-                np.save('test/test_roi/img_before.npy', img.detach().cpu().numpy())
+
+            # new_pc = [_pc.detach().cpu().numpy() for _pc in pc]
+            # new_img_feat = [_img_feat.detach().cpu().numpy() for _img_feat in img_feat]
+            # if not os.path.exists('test/test_scene_aug/pc.npy'):
+            #     np.save('test/test_scene_aug/pc.npy', np.array(new_pc, dtype=object), allow_pickle=True)
+            #     np.save('test/test_scene_aug/img_feat.npy', np.array(new_img_feat, dtype=object), allow_pickle=True)
+            # if not os.path.exists('test/test_roi/img_before.npy'):
+            #     np.save('test/test_roi/img_before.npy', img.detach().cpu().numpy())
             if self.pre_heat_map and self.training:
                 hm = self.grounding_heat_map(img, lang_goal)
                 # (bs*2, 3)
@@ -423,8 +429,8 @@ class MVT(nn.Module):
                     mvt1_or_mvt2=True,
                     dyn_cam_info=None,
                 )
-                if not os.path.exists('test/test_roi/img_after.npy'):
-                    np.save('test/test_roi/img_after.npy', img.detach().cpu().numpy())
+                # if not os.path.exists('test/test_roi/img_after.npy'):
+                #     np.save('test/test_roi/img_after.npy', img.detach().cpu().numpy())
 
         if self.training:
             wpt_local_stage_one = wpt_local

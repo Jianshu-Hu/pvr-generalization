@@ -9,6 +9,7 @@ import torch
 import torch.nn.functional as F
 import torchvision
 import numpy as np
+import timm
 
 from torch import nn
 from einops import rearrange, repeat
@@ -338,6 +339,60 @@ class MVT(nn.Module):
             elif self.pre_image_process == 6:
                 self.img_compress_fc = DenseBlock(
                     img_emb_dim*2,
+                    int(self.im_channels),
+                    norm="group",
+                    activation=activation,
+                )
+                inp_pre_out_dim -= 4
+                self.patchify = Conv2DBlock(
+                    inp_pre_out_dim,
+                    int(self.im_channels),
+                    kernel_sizes=self.img_patch_size,
+                    strides=self.img_patch_size,
+                    norm="group",
+                    activation=activation,
+                    padding=0,
+                )
+            elif self.pre_image_process == 7:
+                self.clip_model = timm.create_model("hf_hub:timm/vit_large_patch14_clip_224.openai", pretrained=True)
+                self.clip_model.to('cuda')
+                self.clip_model.eval()
+
+                # get emb dim
+                with torch.no_grad():
+                    random_img = torch.randn(1, 3, 224, 224).to('cuda')
+                    output = self.clip_model.forward_features(random_img)
+                    clip_img_emb_dim = output.size(2)
+
+                self.img_compress_fc = DenseBlock(
+                    img_emb_dim * 2 + clip_img_emb_dim,
+                    int(self.im_channels),
+                    norm="group",
+                    activation=activation,
+                )
+                inp_pre_out_dim -= 4
+                self.patchify = Conv2DBlock(
+                    inp_pre_out_dim,
+                    int(self.im_channels),
+                    kernel_sizes=self.img_patch_size,
+                    strides=self.img_patch_size,
+                    norm="group",
+                    activation=activation,
+                    padding=0,
+                )
+            elif self.pre_image_process == 8:
+                self.clip_model = timm.create_model("hf_hub:timm/vit_large_patch14_clip_224.openai", pretrained=True)
+                self.clip_model.to('cuda')
+                self.clip_model.eval()
+
+                # get emb dim
+                with torch.no_grad():
+                    random_img = torch.randn(1, 3, 224, 224).to('cuda')
+                    output = self.clip_model.forward_features(random_img)
+                    clip_img_emb_dim = output.size(2)
+
+                self.img_compress_fc = DenseBlock(
+                    img_emb_dim + clip_img_emb_dim,
                     int(self.im_channels),
                     norm="group",
                     activation=activation,
@@ -716,101 +771,95 @@ class MVT(nn.Module):
             ins = rearrange(ins, "(b n p1 p2) d -> b n d p1 p2", b=bs, n=num_img, p1=num_pat_img, p2=num_pat_img)
             # (bs, im_channel, num_img, num_p, num_p)
             ins = ins.transpose(1, 2)
-        elif self.pre_image_process == 4:
-            # (bs * num_img, 3, h, w)
-            rgb_views_image = d0[:, 3:6, :, :]
-            # (bs * num_img, 3, h, w)
-            depth_views_image = d0[:, 6:7, :, :].expand(-1, 3, -1, -1)
-            # (bs * num_img, 6, h, w)
-            remaining_info = torch.cat((d0[:, 0:3, :, :], d0[:, 7:, :, :]), dim=1)
-            # use grounding-dino for detecting bounding box for each view
-            boxes = self.grounding_heat_map.get_predicted_boxes(
-                d0.reshape(bs, self.num_img, img_feat_dim, h, w), lang_goal)  # (bs, num_image, K, 4)
-
-            all_roi_image = []
-            all_roi_depth = []
-            all_roi_remaining = []
-            for i in range(boxes.size(0)):
-                x1, y1, x2, y2 = tuple(boxes[i])
-                all_roi_image.append(self.resize(rgb_views_image[i, :, y1:y2, x1:x2]))
-                all_roi_depth.append(self.resize(depth_views_image[i, :, y1:y2, x1:x2]))
-                all_roi_remaining.append(self.resize(remaining_info[i, :, y1:y2, x1:x2]))
-            # (bs * num_img, 3, h, w)
-            all_roi_image = torch.stack(all_roi_image)
-            # (bs * num_img, 3, h, w)
-            all_roi_depth = torch.stack(all_roi_depth)
-            # (bs * num_img, 6, h, w)
-            all_roi_remaining = torch.stack(all_roi_remaining)
-
-            # (bs * num_img, num_p*num_p, d)
-            processed_image_patches = (self.pretrained_image_encoder.forward_features(
-                all_roi_image))['x_norm_patchtokens']
-            # (bs * num_img, num_p*num_p, d)
-            processed_depth_patches = (self.pretrained_image_encoder.forward_features(
-                all_roi_depth))['x_norm_patchtokens']
-            # (bs*num_img, im_channel/2, num_p, num_p)
-            processed_remaining_patches = self.patchify(all_roi_remaining)
-
-            # (bs * num_img * num_p * num_p, d)
-            ins = rearrange(torch.cat((processed_image_patches, processed_depth_patches), dim=-1), 'b p d -> (b p) d')
-            # (bs*num_img*num_p*num_p, im_channels/2)
-            ins = self.img_compress_fc(ins)
-            # (bs, im_channels/2, num_img, np, np)
-            ins = rearrange(ins, '(b n p1 p2) d->b d n p1 p2', b=bs, n=num_img, p1=num_pat_img, p2=num_pat_img)
-
-            # (bs, im_channels/2, num_img, np, np)
-            processed_remaining_patches = rearrange(processed_remaining_patches,
-                                                    '(b n) d p1 p2->b d n p1 p2', b=bs, n=num_img)
-            # (bs, im_channels, num_img, np, np)
-            ins = torch.cat((ins, processed_remaining_patches), dim=1)
-        elif self.pre_image_process == 5:
-            # (bs * num_img, 3, h, w)
-            rgb_views_image = d0[:, 3:6, :, :]
-            # (bs * num_img, 3, h, w)
-            depth_views_image = d0[:, 6:7, :, :].expand(-1, 3, -1, -1)
-            # (bs * num_img, 6, h, w)
-            remaining_info = torch.cat((d0[:, 0:3, :, :], d0[:, 7:, :, :]), dim=1)
-
-            # (bs * num_img, num_p*num_p, d)
-            processed_image_patches = (self.pretrained_image_encoder.forward_features(
-                rgb_views_image))['x_norm_patchtokens']
-            # (bs * num_img, num_p*num_p, d)
-            processed_depth_patches = (self.pretrained_image_encoder.forward_features(
-                depth_views_image))['x_norm_patchtokens']
-            # (bs*num_img, im_channel/2, num_p, num_p)
-            processed_remaining_patches = self.patchify(remaining_info)
-
-            # (bs * num_img * num_p * num_p, d)
-            ins = rearrange(torch.cat((processed_image_patches, processed_depth_patches), dim=-1), 'b p d -> (b p) d')
-            # (bs*num_img*num_p*num_p, im_channels/2)
-            ins = self.img_compress_fc(ins)
-            # (bs, im_channels/2, num_img, np, np)
-            ins = rearrange(ins, '(b n p1 p2) d->b d n p1 p2', b=bs, n=num_img, p1=num_pat_img, p2=num_pat_img)
-
-            # (bs, im_channels/2, num_img, np, np)
-            processed_remaining_patches = rearrange(processed_remaining_patches,
-                                                    '(b n) d p1 p2->b d n p1 p2', b=bs, n=num_img)
-            # (bs, im_channels, num_img, np, np)
-            ins = torch.cat((ins, processed_remaining_patches), dim=1)
         elif self.pre_image_process == 6:
-            # (bs * num_img, 3, h, w)
-            rgb_views_image = d0[:, 3:6, :, :]
-            # (bs * num_img, 3, h, w)
-            depth_views_image = d0[:, 6:7, :, :].expand(-1, 3, -1, -1)
-            # (bs * num_img, 6, h, w)
-            pos_info = torch.cat((d0[:, 0:3, :, :], d0[:, 7:, :, :]), dim=1)
+            # process rgb and depth image with DINO, use other info as position embedding
+            with torch.no_grad():
+                # (bs * num_img, 3, h, w)
+                rgb_views_image = d0[:, 3:6, :, :]
+                # (bs * num_img, 3, h, w)
+                depth_views_image = d0[:, 6:7, :, :].expand(-1, 3, -1, -1)
+                # (bs * num_img, 6, h, w)
+                pos_info = torch.cat((d0[:, 0:3, :, :], d0[:, 7:, :, :]), dim=1)
 
-            # (bs * num_img, num_p*num_p, d)
-            processed_image_patches = (self.pretrained_image_encoder.forward_features(
-                rgb_views_image))['x_norm_patchtokens']
-            # (bs * num_img, num_p*num_p, d)
-            processed_depth_patches = (self.pretrained_image_encoder.forward_features(
-                depth_views_image))['x_norm_patchtokens']
+                # (bs * num_img, num_p*num_p, d)
+                processed_image_patches = (self.pretrained_image_encoder.forward_features(
+                    rgb_views_image))['x_norm_patchtokens']
+                # (bs * num_img, num_p*num_p, d)
+                processed_depth_patches = (self.pretrained_image_encoder.forward_features(
+                    depth_views_image))['x_norm_patchtokens']
+                # (bs * num_img * num_p * num_p, d)
+                ins = rearrange(torch.cat((processed_image_patches, processed_depth_patches), dim=-1),
+                                'b p d -> (b p) d')
             # (bs*num_img, im_channel/2, num_p, num_p)
             processed_pos_emb = self.patchify(pos_info)
 
-            # (bs * num_img * num_p * num_p, d)
-            ins = rearrange(torch.cat((processed_image_patches, processed_depth_patches), dim=-1), 'b p d -> (b p) d')
+            # (bs*num_img*num_p*num_p, im_channels)
+            ins = self.img_compress_fc(ins)
+            # (bs, im_channels, num_img, np, np)
+            ins = rearrange(ins, '(b n p1 p2) d->b d n p1 p2', b=bs, n=num_img, p1=num_pat_img, p2=num_pat_img)
+
+            # (bs, im_channels, num_img, np, np)
+            processed_pos_emb = rearrange(processed_pos_emb, '(b n) d p1 p2->b d n p1 p2', b=bs, n=num_img)
+            # (bs, im_channels, num_img, np, np)
+            ins = ins+processed_pos_emb
+        elif self.pre_image_process == 7:
+            # process rgb with DINO and clip, process depth image with DINO, use other info as position embedding
+            with torch.no_grad():
+                # (bs * num_img, 3, h, w)
+                rgb_views_image = d0[:, 3:6, :, :]
+                # (bs * num_img, 3, h, w)
+                depth_views_image = d0[:, 6:7, :, :].expand(-1, 3, -1, -1)
+                # (bs * num_img, 6, h, w)
+                pos_info = torch.cat((d0[:, 0:3, :, :], d0[:, 7:, :, :]), dim=1)
+
+                # (bs * num_img, num_p*num_p, d)
+                processed_image_patches = (self.pretrained_image_encoder.forward_features(
+                    rgb_views_image))['x_norm_patchtokens']
+                # (bs * num_img, num_p*num_p, d)
+                processed_depth_patches = (self.pretrained_image_encoder.forward_features(
+                    depth_views_image))['x_norm_patchtokens']
+                # (bs * num_img, num_p*num_p, d)
+                clip_image_patches = self.clip_model.forward_features(rgb_views_image)[:, 1:, :]
+
+                # (bs * num_img * num_p * num_p, d)
+                ins = rearrange(torch.cat((processed_image_patches, processed_depth_patches, clip_image_patches),
+                                          dim=-1), 'b p d -> (b p) d')
+
+            # (bs*num_img, im_channel/2, num_p, num_p)
+            processed_pos_emb = self.patchify(pos_info)
+
+            # (bs*num_img*num_p*num_p, im_channels)
+            ins = self.img_compress_fc(ins)
+            # (bs, im_channels, num_img, np, np)
+            ins = rearrange(ins, '(b n p1 p2) d->b d n p1 p2', b=bs, n=num_img, p1=num_pat_img, p2=num_pat_img)
+
+            # (bs, im_channels, num_img, np, np)
+            processed_pos_emb = rearrange(processed_pos_emb, '(b n) d p1 p2->b d n p1 p2', b=bs, n=num_img)
+            # (bs, im_channels, num_img, np, np)
+            ins = ins+processed_pos_emb
+        elif self.pre_image_process == 8:
+            # process rgb with clip, process depth image with DINO, use other info as position embedding
+            with torch.no_grad():
+                # (bs * num_img, 3, h, w)
+                rgb_views_image = d0[:, 3:6, :, :]
+                # (bs * num_img, 3, h, w)
+                depth_views_image = d0[:, 6:7, :, :].expand(-1, 3, -1, -1)
+                # (bs * num_img, 6, h, w)
+                pos_info = torch.cat((d0[:, 0:3, :, :], d0[:, 7:, :, :]), dim=1)
+
+                # (bs * num_img, num_p*num_p, d)
+                processed_image_patches = self.clip_model.forward_features(rgb_views_image)[:, 1:, :]
+                # (bs * num_img, num_p*num_p, d)
+                processed_depth_patches = (self.pretrained_image_encoder.forward_features(
+                    depth_views_image))['x_norm_patchtokens']
+
+                # (bs * num_img * num_p * num_p, d)
+                ins = rearrange(torch.cat((processed_image_patches, processed_depth_patches),
+                                          dim=-1), 'b p d -> (b p) d')
+
+            # (bs*num_img, im_channel/2, num_p, num_p)
+            processed_pos_emb = self.patchify(pos_info)
+
             # (bs*num_img*num_p*num_p, im_channels)
             ins = self.img_compress_fc(ins)
             # (bs, im_channels, num_img, np, np)

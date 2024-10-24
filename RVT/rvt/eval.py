@@ -377,7 +377,7 @@ def eval(
         if save_video:
             video_image_folder = f"./tmp/{task_name}"
             num_succ_video = 2
-            num_fail_video = 2
+            num_fail_video = 25
             record_fps = 25
             record_folder = os.path.join(log_dir, "videos")
             os.makedirs(record_folder, exist_ok=True)

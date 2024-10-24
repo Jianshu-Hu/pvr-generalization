@@ -2,7 +2,7 @@ exp_id: rvt2
 tasks: all
 bs: 24
 num_workers: 3
-epochs: 15
+epochs: 10
 sample_distribution_mode: task_uniform
 verbose: False
 resume: ""
