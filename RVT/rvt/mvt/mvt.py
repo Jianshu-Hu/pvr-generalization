@@ -404,24 +404,29 @@ class MVT(nn.Module):
                 mvt1_or_mvt2=True,
                 dyn_cam_info=None,
             )
-
-            # new_pc = [_pc.detach().cpu().numpy() for _pc in pc]
-            # new_img_feat = [_img_feat.detach().cpu().numpy() for _img_feat in img_feat]
-            # if not os.path.exists('test/test_scene_aug/pc.npy'):
-            #     np.save('test/test_scene_aug/pc.npy', np.array(new_pc, dtype=object), allow_pickle=True)
-            #     np.save('test/test_scene_aug/img_feat.npy', np.array(new_img_feat, dtype=object), allow_pickle=True)
-            # if not os.path.exists('test/test_roi/img_before.npy'):
-            #     np.save('test/test_roi/img_before.npy', img.detach().cpu().numpy())
-            if self.pre_heat_map and self.training:
-                hm = self.grounding_heat_map(img, lang_goal)
-                # (bs*2, 3)
-                box_global_point = self.get_wpt(
-                    hm, y_q=None, mvt1_or_mvt2=True,
-                    dyn_cam_info=None,
-                )
-
-                pc, img_feat = self.grounding_heat_map.filter_pc(box_global_point, pc, img_feat)
-
+            # if not self.pre_heat_map and self.training:
+            #     bs = len(pc)
+            #     # (bs*2, 3)
+            #     box_center = (torch.rand(bs, 3)*2-1).to(wpt_local.device)
+            #     box_size = (torch.rand(bs, 3)*0.2).to(wpt_local.device)
+            #     box_min = (torch.clip(box_center-box_size/2, min=-1)).unsqueeze(1)
+            #     box_max = (torch.clip(box_center+box_size/2, max=1)).unsqueeze(1)
+            #
+            #     for i in range(bs):
+            #         # (num_point)
+            #         within_range = (torch.sum(pc[i] >= box_min[i], dim=-1) == 3) & (
+            #                     torch.sum(pc[i] <= box_max[i], dim=-1) == 3)
+            #         pc[i] = pc[i][~within_range]
+            #         img_feat[i] = img_feat[i][~within_range]
+            # img = self.render(
+            #     pc=pc,
+            #     img_feat=img_feat,
+            #     img_aug=img_aug,
+            #     mvt1_or_mvt2=True,
+            #     dyn_cam_info=None,
+            # )
+            # if self.pre_heat_map and not self.training:
+            if self.pre_heat_map:
                 img = self.render(
                     pc=pc,
                     img_feat=img_feat,
@@ -429,8 +434,37 @@ class MVT(nn.Module):
                     mvt1_or_mvt2=True,
                     dyn_cam_info=None,
                 )
-                # if not os.path.exists('test/test_roi/img_after.npy'):
-                #     np.save('test/test_roi/img_after.npy', img.detach().cpu().numpy())
+                # if not hasattr(self, 'grounding_heat_map'):
+                #     self.grounding_heat_map = GroundingDinoHeatMap()
+                #     print('Use grounding dino for extracting roi.')
+                if self.training:
+                    hm = self.grounding_heat_map(img, lang_goal)
+                else:
+                    hm = self.grounding_heat_map(img, np.array([[lang_goal]]))
+                # (bs*2, 3)
+                box_global_point = self.get_wpt(
+                    hm, y_q=None, mvt1_or_mvt2=True,
+                    dyn_cam_info=None,
+                )
+
+                pc, img_feat = self.grounding_heat_map.filter_pc(box_global_point, pc, img_feat)
+                # if not hasattr(self, 'counter'):
+                #     self.counter = 0
+                # while os.path.exists(f'img_before_crop_{self.counter}.npy'):
+                #     self.counter += 1
+                # np.save(f'img_before_crop_{self.counter}.npy', img.detach().cpu().numpy()[:, :, 3:6, :, :])
+                # print(f'save to img_before_crop_{self.counter}.npy')
+                img = self.render(
+                    pc=pc,
+                    img_feat=img_feat,
+                    img_aug=img_aug,
+                    mvt1_or_mvt2=True,
+                    dyn_cam_info=None,
+                )
+                # while os.path.exists(f'img_after_crop_{self.counter}.npy'):
+                #     self.counter += 1
+                # np.save(f'img_after_crop_{self.counter}.npy', img.detach().cpu().numpy()[:, :, 3:6, :, :])
+                # print(f'save to img_after_crop_{self.counter}.npy')
 
         if self.training:
             wpt_local_stage_one = wpt_local

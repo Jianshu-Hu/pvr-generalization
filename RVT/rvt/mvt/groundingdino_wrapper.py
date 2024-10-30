@@ -23,15 +23,15 @@ class GroundingDinoHeatMap(nn.Module):
         self.resize_size = 224
         self.resize = T.Resize(self.resize_size)
         # the number of top bounding boxes in each view
-        self.K = 5
+        self.K = 10
 
         self.all_combination = []
         self.num_view = None
 
         self.device = 'cuda'
-        self.clip_model, self.clip_preprocess = clip.load("RN50", self.device)
-        self.clip_model.to(device=self.device)
-        self.clip_model.eval()
+        # self.clip_model, self.clip_preprocess = clip.load("RN50", self.device)
+        # self.clip_model.to(device=self.device)
+        # self.clip_model.eval()
 
         self.cosine_similarity = torch.nn.CosineSimilarity(dim=-1, eps=1e-08)
 
@@ -43,8 +43,8 @@ class GroundingDinoHeatMap(nn.Module):
         captions = list(map(preprocess_caption, captions))
 
         with torch.no_grad():
-            self.model.to('cuda')
-            image.to('cuda')
+            self.model.to(self.device)
+            image.to(self.device)
             outputs = self.model(image, captions=captions)
 
         prediction_logits = outputs["pred_logits"].sigmoid()  # (bs, nq, 256)
@@ -275,48 +275,64 @@ class GroundingDinoHeatMap(nn.Module):
         return pc_dataset, img_feature_dataset
 
     def filter_pc(self, box_global_point, pc, img_feat):
-        if self.pc_dataset is None:
-            # build pc dataset
-            self.pc_dataset, self.img_feature_dataset = self.build_pc_dataset()
-            print('Build point cloud data set for pc augmentation')
-
         b = len(pc)
         # (b, 2, 3)
         box_global_point = rearrange(box_global_point, '(b x) p-> b x p', b=b, x=2)
         xyz_max = box_global_point[:, 1]
         xyz_min = box_global_point[:, 0]
 
-        # obj size range from 0.1 to 0.4
-        obj_size = 0.25+(torch.rand(b, 1).to(box_global_point.device)*2-1)*0.15
-        obj_size = obj_size.repeat(1, 3)
-        obj_pos = torch.rand(b, 3).to(box_global_point.device)*2-1
-        obj_max = obj_pos+obj_size/2
-        obj_min = obj_pos-obj_size/2
-        # Check for overlap in the x, y, z dimension
-        valid_obj = torch.logical_or(torch.sum(xyz_max <= obj_min, dim=-1) > 0,
-                                     torch.sum(obj_max <= xyz_min, dim=-1) > 0)
-        obj_ind = torch.randint(low=0, high=self.dataset_size, size=(b, )).to(valid_obj.device)
-
         pc_new = []
         img_feat_new = []
         for i in range(b):
-            if valid_obj[i]:
-                obj_pc = self.pc_dataset[obj_ind[i]].to(obj_size.device)*obj_size[i]
-                obj_img_feature = self.img_feature_dataset[obj_ind[i]].to(obj_ind.device)
-
-                # TODO: add augmentation to the pc
-                # shift the pc
-                obj_pc = obj_pc+obj_pos[i]
-                crop_out_of_space_points = torch.logical_and(torch.sum(obj_pc <= 1.0, dim=-1) == 3,
-                                                             torch.sum(obj_pc >= -1.0, dim=-1) == 3)
-                obj_pc = obj_pc[crop_out_of_space_points]
-                obj_img_feature = obj_img_feature[crop_out_of_space_points]
-
-                # TODO:better way to combine two point cloud
-                pc_new.append(torch.cat([pc[i], obj_pc], dim=0))
-                img_feat_new.append(torch.cat([img_feat[i], obj_img_feature], dim=0))
-            else:
-                pc_new.append(pc[i])
-                img_feat_new.append(img_feat[i])
+            # (num_point)
+            within_range = (torch.sum(pc[i] >= xyz_min[i], dim=-1) == 3) & (torch.sum(pc[i] <= xyz_max[i], dim=-1) == 3)
+            pc_new.append(pc[i][within_range])
+            img_feat_new.append(img_feat[i][within_range])
         return pc_new, img_feat_new
+
+    # def filter_pc(self, box_global_point, pc, img_feat):
+    #     if self.pc_dataset is None:
+    #         # build pc dataset
+    #         self.pc_dataset, self.img_feature_dataset = self.build_pc_dataset()
+    #         print('Build point cloud data set for pc augmentation')
+    #
+    #     b = len(pc)
+    #     # (b, 2, 3)
+    #     box_global_point = rearrange(box_global_point, '(b x) p-> b x p', b=b, x=2)
+    #     xyz_max = box_global_point[:, 1]
+    #     xyz_min = box_global_point[:, 0]
+    #
+    #     # obj size range from 0.1 to 0.4
+    #     obj_size = 0.25+(torch.rand(b, 1).to(box_global_point.device)*2-1)*0.15
+    #     obj_size = obj_size.repeat(1, 3)
+    #     obj_pos = torch.rand(b, 3).to(box_global_point.device)*2-1
+    #     obj_max = obj_pos+obj_size/2
+    #     obj_min = obj_pos-obj_size/2
+    #     # Check for overlap in the x, y, z dimension
+    #     valid_obj = torch.logical_or(torch.sum(xyz_max <= obj_min, dim=-1) > 0,
+    #                                  torch.sum(obj_max <= xyz_min, dim=-1) > 0)
+    #     obj_ind = torch.randint(low=0, high=self.dataset_size, size=(b, )).to(valid_obj.device)
+    #
+    #     pc_new = []
+    #     img_feat_new = []
+    #     for i in range(b):
+    #         if valid_obj[i]:
+    #             obj_pc = self.pc_dataset[obj_ind[i]].to(obj_size.device)*obj_size[i]
+    #             obj_img_feature = self.img_feature_dataset[obj_ind[i]].to(obj_ind.device)
+    #
+    #             # TODO: add augmentation to the pc
+    #             # shift the pc
+    #             obj_pc = obj_pc+obj_pos[i]
+    #             crop_out_of_space_points = torch.logical_and(torch.sum(obj_pc <= 1.0, dim=-1) == 3,
+    #                                                          torch.sum(obj_pc >= -1.0, dim=-1) == 3)
+    #             obj_pc = obj_pc[crop_out_of_space_points]
+    #             obj_img_feature = obj_img_feature[crop_out_of_space_points]
+    #
+    #             # TODO:better way to combine two point cloud
+    #             pc_new.append(torch.cat([pc[i], obj_pc], dim=0))
+    #             img_feat_new.append(torch.cat([img_feat[i], obj_img_feature], dim=0))
+    #         else:
+    #             pc_new.append(pc[i])
+    #             img_feat_new.append(img_feat[i])
+    #     return pc_new, img_feat_new
 
