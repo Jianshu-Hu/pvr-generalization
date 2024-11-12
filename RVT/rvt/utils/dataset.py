@@ -125,7 +125,17 @@ def create_replay(
                 np.float32,
             ),
             ReplayElement(
+                "step_single_embs",
+                (
+                    lang_feat_dim,
+                ),  # extracted from CLIP's language encoder
+                np.float32,
+            ),
+            ReplayElement(
                 "lang_goal", (1,), object
+            ),  # language goal string for debugging and visualization
+            ReplayElement(
+                "step_lang_goal", (1,), object
             ),  # language goal string for debugging and visualization
         ]
     )
@@ -230,6 +240,7 @@ def _add_keypoints_to_replay(
     crop_augmentation: bool,
     next_keypoint_idx: int,
     description: str = "",
+    step_description: str = "",
     clip_model=None,
     device="cpu",
 ):
@@ -272,6 +283,13 @@ def _add_keypoints_to_replay(
             lang_feats, lang_embs = _clip_encode_text(clip_model, token_tensor)
         obs_dict["lang_goal_embs"] = lang_embs[0].float().detach().cpu().numpy()
 
+        step_desc_tokens = clip.tokenize([step_description]).numpy()
+        step_desc_tokens_tensor = torch.from_numpy(step_desc_tokens).to(device)
+
+        with torch.no_grad():
+            step_single_embs = clip_model.encode_text(step_desc_tokens_tensor)
+        obs_dict["step_single_embs"] = step_single_embs[0].float().detach().cpu().numpy()
+
         prev_action = np.copy(action)
 
         if k == 0:
@@ -291,6 +309,7 @@ def _add_keypoints_to_replay(
             "rot_grip_action_indicies": rot_grip_indicies,
             "gripper_pose": obs_tp1.gripper_pose,
             "lang_goal": np.array([description], dtype=object),
+            "step_lang_goal": np.array([step_description], dtype=object),
         }
 
         others.update(final_obs)
@@ -318,6 +337,7 @@ def _add_keypoints_to_replay(
         episode_length=25,
     )
     obs_dict_tp1["lang_goal_embs"] = lang_embs[0].float().detach().cpu().numpy()
+    obs_dict_tp1["step_single_embs"] = step_single_embs[0].float().detach().cpu().numpy()
 
     obs_dict_tp1.pop("wrist_world_to_cam", None)
     obs_dict_tp1.update(final_obs)
@@ -375,6 +395,36 @@ def fill_replay(
 
             # extract keypoints
             episode_keypoints = keypoint_discovery(demo)
+            # print(episode_keypoints)
+            print(descs[0])
+
+            # TODO: use llm for processing the language instruction
+            # if task == 'close_box':
+            #     step_descs = ['grasp the lid', 'grasp the lid', 'close', 'release', 'release']
+            #     del episode_keypoints[0]
+            #     del episode_keypoints[2]
+            # elif task == 'close_laptop_lid':
+            #     step_descs = ['grasp the lid', 'close', 'close', 'release']
+            #     del episode_keypoints[1]
+            if task == 'close_box':
+                step_descs = ['approaching', 'grasp', 'close', 'release', 'release']
+            elif task == 'close_laptop_lid':
+                step_descs = ['grasp', 'close', 'close',  'release']
+            elif task == 'stack_cups':
+                step_descs = ['approaching', 'grasp', 'lift', 'move', 'release',
+                              'approaching', 'grasp', 'lift', 'move', 'release']
+            # if task == 'close_box':
+            #     step_descs = ['approaching the lid', 'grasp the lid', 'close the lid',
+            #                   'release the gripper', 'release the gripper']
+            # elif task == 'close_laptop_lid':
+            #     step_descs = ['grasp the lid', 'close the lid', 'close the lid',  'release the gripper']
+            # elif task == 'stack_cups':
+            #     step_descs = ['approaching cup 1', 'grasp cup 1', 'lift cup 1', 'move to the target cup', 'release',
+            #                   'approaching cup 2', 'grasp cup 2', 'lift cup 2', 'move to the target cup', 'release']
+            else:
+                step_descs = [descs[0]]*len(episode_keypoints)
+                print('warning: the step language instruction for this task is not specified')
+
             next_keypoint_idx = 0
             for i in range(len(demo) - 1):
                 if not demo_augmentation and i > 0:
@@ -384,6 +434,7 @@ def fill_replay(
 
                 obs = demo[i]
                 desc = descs[0]
+                step_desc = step_descs[next_keypoint_idx]
                 # if our starting point is past one of the keypoints, then remove it
                 while (
                     next_keypoint_idx < len(episode_keypoints)
@@ -408,6 +459,7 @@ def fill_replay(
                     crop_augmentation,
                     next_keypoint_idx=next_keypoint_idx,
                     description=desc,
+                    step_description=step_desc,
                     clip_model=clip_model,
                     device=device,
                 )

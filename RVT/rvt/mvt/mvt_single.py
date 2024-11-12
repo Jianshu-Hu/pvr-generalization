@@ -10,6 +10,7 @@ import torch.nn.functional as F
 import torchvision
 import numpy as np
 import timm
+import clip
 
 from torch import nn
 from einops import rearrange, repeat
@@ -27,6 +28,7 @@ from rvt.mvt.attn import (
 )
 from rvt.mvt.raft_utils import ConvexUpSample
 from rvt.mvt.groundingdino_wrapper import GroundingDinoHeatMap
+from rvt.utils.dataset import _clip_encode_text
 
 
 class MVT(nn.Module):
@@ -68,6 +70,7 @@ class MVT(nn.Module):
         rot_ver,
         num_rot,
         pre_image_process,
+        step_lang_type,
         renderer_device="cuda:0",
         renderer=None,
         no_feat=False,
@@ -130,6 +133,8 @@ class MVT(nn.Module):
 
         :param pre_image_process: use a pretrained image encoder to preprocess the RGB images
             from different views
+        :param step_lang_type: label the action per step with a specific language instruction and align the action with
+            this language instruction for generalization across different tasks
         """
 
         super().__init__()
@@ -162,6 +167,7 @@ class MVT(nn.Module):
         self.num_rot = num_rot
         self.no_feat = no_feat
         self.pre_image_process = pre_image_process
+        self.step_lang_type = step_lang_type
 
         if self.cvx_up:
             assert not self.inp_pre_con, (
@@ -418,6 +424,64 @@ class MVT(nn.Module):
                 padding=0,
             )
 
+        if self.step_lang_type > 0:
+            print(f'use per-step language instruction to help improve the generalization across tasks,'
+                  f' and use type {self.step_lang_type}.')
+            if self.step_lang_type == 2:
+                # align the max visual feature with the step language instruction feature
+                self.step_lang_pred_layer = nn.Sequential(
+                    DenseBlock(
+                        self.num_img * self.im_channels * 2,
+                        self.im_channels * 4,
+                        norm="group",
+                        activation=activation,),
+                    DenseBlock(
+                        self.im_channels * 4,
+                        lang_emb_dim*2,
+                        norm="layer",
+                        activation=activation,)
+                )
+            elif self.step_lang_type == 4:
+                # align the max language feature with the step language instruction feature
+                self.step_lang_pred_layer = nn.Sequential(
+                    DenseBlock(
+                        attn_dim,
+                        attn_dim,
+                        norm="group",
+                        activation=activation,),
+                    DenseBlock(
+                        attn_dim,
+                        lang_emb_dim*2,
+                        norm="layer",
+                        activation=activation,)
+                )
+            elif self.step_lang_type == 5:
+                # align all visual patch feature with the step language instruction feature
+                self.step_lang_pred_layer_1 = DenseBlock(
+                        spatial_size**2 * self.im_channels * 2,
+                        self.im_channels * 2,
+                        norm="group",
+                        activation=activation,)
+                self.step_lang_pred_layer_2 = DenseBlock(
+                        self.num_img * self.im_channels * 2,
+                        lang_emb_dim*2,
+                        norm="layer",
+                        activation=activation,)
+            elif self.step_lang_type == 6:
+                # align all language patch features with the step language instruction feature
+                self.step_lang_pred_layer = nn.Sequential(
+                    DenseBlock(
+                        77 * self.im_channels * 2,
+                        self.im_channels * 2,
+                        norm="group",
+                        activation=activation,),
+                    DenseBlock(
+                        self.im_channels * 2,
+                        lang_emb_dim*2,
+                        norm="layer",
+                        activation=activation,)
+                )
+
         if self.add_proprio:
             # proprio preprocessing encoder
             self.proprio_preprocess = DenseBlock(
@@ -589,6 +653,8 @@ class MVT(nn.Module):
         img,
         proprio=None,
         lang_emb=None,
+        step_single_embs=None,
+        step_lang_goal=None,
         lang_goal=None,
         wpt_local=None,
         rot_x_y=None,
@@ -599,6 +665,8 @@ class MVT(nn.Module):
         :param proprio: tensor of shape (bs, priprio_dim)
         :param lang_emb: tensor of shape (bs, lang_len, lang_dim)
         :param lang_goal: (bs, 1), language goal
+        :param step_single_embs: tensor of shape (bs, another_lang_dim)
+        :param step_lang_goal: (bs, 1), language goal
         :param img_aug: (float) magnitude of augmentation in rgb image
         :param rot_x_y: (bs, 2)
         """
@@ -959,6 +1027,18 @@ class MVT(nn.Module):
         if self.add_lang:
             # throwing away the language embeddings
             x = x[:, num_lang_tok:]
+            if self.step_lang_type in {4} and self.training:
+                # (B, 77, attn_dim)
+                lang_x = x[:, :num_lang_tok]
+                # (B, attn_dim)
+                lang_x = torch.max(lang_x, dim=1)[0]
+            if self.step_lang_type in {6} and self.training:
+                # (B, 77, attn_dim)
+                lang_x = x[:, :num_lang_tok]
+                # (B, 77, 128)
+                lang_x = self.fc_aft_attn(lang_x)
+                # (B, 77*128)
+                lang_x = lang_x.view(bs, -1)
         x = self.fc_aft_attn(x)
 
         # reshape back to original size
@@ -969,6 +1049,27 @@ class MVT(nn.Module):
         _feat = torch.max(torch.max(x, dim=-1)[0], dim=-1)[0]
         _feat = _feat.view(bs, -1)
         feat.append(_feat)
+
+        if self.training and self.step_lang_type > 0:
+            if self.step_lang_type == 2:
+                # (b, lang_emb_dim)
+                step_lang_prediction = self.step_lang_pred_layer(_feat)
+            elif self.step_lang_type == 4:
+                # (b, lang_emb_dim)
+                step_lang_prediction = self.step_lang_pred_layer(lang_x)
+            elif self.step_lang_type == 5:
+                # (b*num_img, im_channel*np*np)
+                x = rearrange(x, 'b d nv np1 np2 -> (b nv) (d np1 np2)')
+                step_lang_prediction = self.step_lang_pred_layer_1(x)
+                # (b, lang_emb_dim)
+                step_lang_prediction = self.step_lang_pred_layer_2(step_lang_prediction.reshape(bs, -1))
+                x = rearrange(x, '(b nv) (d np1 np2) -> b d nv np1 np2',
+                              b=bs, nv=self.num_img, d=self.input_dim_before_seq, np1=num_pat_img, np2=num_pat_img)
+            elif self.step_lang_type == 6:
+                # (b, lang_emb_dim)
+                step_lang_prediction = self.step_lang_pred_layer(lang_x)
+        else:
+            step_lang_prediction = None
 
         x = (
             x.transpose(1, 2)
@@ -1103,6 +1204,7 @@ class MVT(nn.Module):
             out = {}
 
         out.update({"trans": trans})
+        out.update({"step_lang_prediction": step_lang_prediction})
 
         return out
 

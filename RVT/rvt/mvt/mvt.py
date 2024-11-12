@@ -65,6 +65,7 @@ class MVT(nn.Module):
         img_aug_2,
         pre_image_process,
         pre_heat_map,
+        step_lang_type,
         renderer_device="cuda:0",
     ):
         """MultiView Transfomer
@@ -86,6 +87,8 @@ class MVT(nn.Module):
             from different views
         :param pre_heat_map: use a pretrained grounding-dino to preprocess the RGB images to find the roi
             in each view to augment the pc
+        :param step_lang_type: label the action per step with a specific language instruction and align the action with
+            this language instruction for generalization across different tasks
         """
         super().__init__()
 
@@ -363,6 +366,8 @@ class MVT(nn.Module):
         img_feat,
         proprio=None,
         lang_emb=None,
+        step_single_embs=None,
+        step_lang_goal=None,
         lang_goal=None,
         img_aug=0,
         wpt_local=None,
@@ -376,6 +381,8 @@ class MVT(nn.Module):
         :param proprio: tensor of shape (bs, priprio_dim)
         :param lang_emb: tensor of shape (bs, lang_len, lang_dim)
         :param lang_goal: (bs, 1), language goal
+        :param step_single_embs: tensor of shape (bs, another_lang_dim)
+        :param step_lang_goal: (bs, 1), step language goal
         :param img_aug: (float) magnitude of augmentation in rgb image
         :param wpt_local: gt location of the wpt in 3D, tensor of shape
             (bs, 3)
@@ -476,6 +483,8 @@ class MVT(nn.Module):
             img=img,
             proprio=proprio,
             lang_emb=lang_emb,
+            step_single_embs=step_single_embs,
+            step_lang_goal=step_lang_goal,
             lang_goal=lang_goal,
             wpt_local=wpt_local_stage_one,
             rot_x_y=rot_x_y,
@@ -531,6 +540,8 @@ class MVT(nn.Module):
                 img=img,
                 proprio=proprio,
                 lang_emb=lang_emb,
+                step_single_embs=step_single_embs,
+                step_lang_goal=step_lang_goal,
                 lang_goal=lang_goal,
                 wpt_local=wpt_local2,
                 rot_x_y=rot_x_y,

@@ -542,6 +542,9 @@ class RVTAgent:
         )
         assert replay_sample["lang_goal"].shape[1:] == (1, 1)
 
+        assert replay_sample["step_lang_goal"].shape[1:] == (1, 1)
+        assert replay_sample["step_single_embs"].shape[1:] == (1, 1024)
+
         # sample
         action_rot_grip = replay_sample["rot_grip_action_indicies"][
             :, -1
@@ -557,6 +560,9 @@ class RVTAgent:
         lang_goal_embs = replay_sample["lang_goal_embs"][:, -1].float()
         lang_goal = replay_sample["lang_goal"][:, -1]  # (b, 1)
         tasks = replay_sample["tasks"]
+
+        step_lang_goal = replay_sample["step_lang_goal"][:, -1]  # (b, 1)
+        step_single_embs = replay_sample["step_single_embs"][:, -1].float()
 
         proprio = arm_utils.stack_on_channel(replay_sample["low_dim_state"])  # (b, 4)
         return_out = {}
@@ -660,6 +666,8 @@ class RVTAgent:
                 proprio=proprio,
                 lang_emb=lang_goal_embs,
                 lang_goal=lang_goal,
+                step_single_embs=step_single_embs,
+                step_lang_goal=step_lang_goal,
                 img_aug=img_aug,
                 wpt_local=wpt_local if self._network.training else None,
                 rot_x_y=rot_x_y if self.rot_ver == 1 else None,
@@ -715,6 +723,18 @@ class RVTAgent:
                         collision_q, action_collision_one_hot.argmax(-1)
                     ).mean()
 
+                if out["step_lang_prediction"] is not None:
+                    if out["step_lang_prediction"].size(-1) == step_single_embs.size(-1):
+                        step_lang_pred_loss = -torch.nn.functional.cosine_similarity(
+                            out["step_lang_prediction"], step_single_embs, dim=1, eps=1e-8).mean()
+                        if self.stage_two:
+                            step_lang_pred_loss -= torch.nn.functional.cosine_similarity(
+                                out['mvt2']["step_lang_prediction"], step_single_embs, dim=1, eps=1e-8).mean()
+                    else:
+                        raise ValueError('not implemented')
+                else:
+                    step_lang_pred_loss = torch.tensor([0.0]).to(self._device)
+
                 total_loss = (
                     trans_loss
                     + rot_loss_x
@@ -722,6 +742,7 @@ class RVTAgent:
                     + rot_loss_z
                     + grip_loss
                     + collision_loss
+                    + step_lang_pred_loss
                 )
 
             self._optimizer.zero_grad(set_to_none=True)
@@ -737,6 +758,7 @@ class RVTAgent:
                 "rot_loss_z": rot_loss_z.item(),
                 "grip_loss": grip_loss.item(),
                 "collision_loss": collision_loss.item(),
+                "step_lang_pred_loss": step_lang_pred_loss.item(),
                 "lr": self._optimizer.param_groups[0]["lr"],
             }
             if eval_log:
@@ -831,6 +853,8 @@ class RVTAgent:
             img_feat=img_feat,
             proprio=proprio,
             lang_emb=lang_goal_embs,
+            step_single_embs=None,
+            step_lang_goal=None,
             lang_goal=lang_goal,
             img_aug=0,  # no img augmentation while acting
         )

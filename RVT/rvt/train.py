@@ -63,6 +63,7 @@ def train(agent, dataset, training_iterations, rank=0, verbose=False):
         }
         batch["tasks"] = raw_batch["tasks"]
         batch["lang_goal"] = raw_batch["lang_goal"]
+        batch["step_lang_goal"] = raw_batch["step_lang_goal"]
         update_args = {
             "step": iteration,
         }
@@ -170,12 +171,18 @@ def experiment(rank, cmd_args, devices, port):
 
     # Things to change
     BATCH_SIZE_TRAIN = exp_cfg.bs
-    NUM_TRAIN = 100
+    # NUM_TRAIN = 100
+    NUM_TRAIN = 10
+    # NUM_TRAIN = 25
     # to match peract, iterations per epoch
     TRAINING_ITERATIONS = int(exp_cfg.train_iter // (exp_cfg.bs * len(devices)))
     EPOCHS = exp_cfg.epochs
-    TRAIN_REPLAY_STORAGE_DIR = "replay/replay_train"
-    TEST_REPLAY_STORAGE_DIR = "replay/replay_val"
+    # TRAIN_REPLAY_STORAGE_DIR = "replay/replay_train"
+    # TEST_REPLAY_STORAGE_DIR = "replay/replay_val"
+    TRAIN_REPLAY_STORAGE_DIR = "replay/replay_train_10_episodes"
+    TEST_REPLAY_STORAGE_DIR = "replay/replay_val_10_episodes"
+    # TRAIN_REPLAY_STORAGE_DIR = "replay/replay_train_25_episodes"
+    # TEST_REPLAY_STORAGE_DIR = "replay/replay_val_25_episodes"
     log_dir = get_logdir(cmd_args, exp_cfg)
     tasks = get_tasks(exp_cfg)
     print("Training on {} tasks: {}".format(len(tasks), tasks))
