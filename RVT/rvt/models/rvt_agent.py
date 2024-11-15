@@ -17,6 +17,7 @@ from scipy.spatial.transform import Rotation
 from torch.cuda.amp import autocast, GradScaler
 from torch.nn.parallel.distributed import DistributedDataParallel
 from torch.optim.lr_scheduler import CosineAnnealingLR
+import torch.nn.functional as F
 
 import rvt.utils.peract_utils as peract_utils
 import rvt.mvt.utils as mvt_utils
@@ -724,12 +725,26 @@ class RVTAgent:
                     ).mean()
 
                 if out["step_lang_prediction"] is not None:
-                    if out["step_lang_prediction"].size(-1) == step_single_embs.size(-1):
-                        step_lang_pred_loss = -torch.nn.functional.cosine_similarity(
-                            out["step_lang_prediction"], step_single_embs, dim=1, eps=1e-8).mean()
+                    if out["step_lang_loss_type"] == 'cosine_sim':
+                        # step_lang_pred_loss = -torch.nn.functional.cosine_similarity(
+                        #     out["step_lang_prediction"], step_single_embs, dim=1, eps=1e-8).mean()
                         if self.stage_two:
-                            step_lang_pred_loss -= torch.nn.functional.cosine_similarity(
+                            step_lang_pred_loss = -torch.nn.functional.cosine_similarity(
                                 out['mvt2']["step_lang_prediction"], step_single_embs, dim=1, eps=1e-8).mean()
+                    elif out["step_lang_loss_type"] == 'contrastive':
+                        # Normalize the feature vectors
+                        visual_features = F.normalize(out["step_lang_prediction"], dim=-1)
+                        language_features = F.normalize(step_single_embs, dim=-1)
+
+                        # Compute similarity between all visual-language pairs
+                        logits_per_image = out["logit_scale"].exp()*torch.matmul(visual_features, language_features.T)
+
+                        # Labels for contrastive learning (positive pairs are on the diagonal)
+                        batch_size = visual_features.shape[0]
+                        labels = torch.arange(batch_size, device=visual_features.device)
+
+                        # Compute the cross-entropy loss
+                        step_lang_pred_loss = F.cross_entropy(logits_per_image, labels)
                     else:
                         raise ValueError('not implemented')
                 else:

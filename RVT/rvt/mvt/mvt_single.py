@@ -455,7 +455,7 @@ class MVT(nn.Module):
                         norm="layer",
                         activation=activation,)
                 )
-            elif self.step_lang_type == 5:
+            elif self.step_lang_type in {5, 7}:
                 # align all visual patch feature with the step language instruction feature
                 self.step_lang_pred_layer_1 = DenseBlock(
                         spatial_size**2 * self.im_channels * 2,
@@ -467,7 +467,9 @@ class MVT(nn.Module):
                         lang_emb_dim*2,
                         norm="layer",
                         activation=activation,)
-            elif self.step_lang_type == 6:
+                if self.step_lang_type == 7:
+                    self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
+            elif self.step_lang_type in {6, 8}:
                 # align all language patch features with the step language instruction feature
                 self.step_lang_pred_layer = nn.Sequential(
                     DenseBlock(
@@ -481,6 +483,8 @@ class MVT(nn.Module):
                         norm="layer",
                         activation=activation,)
                 )
+                if self.step_lang_type == 8:
+                    self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
 
         if self.add_proprio:
             # proprio preprocessing encoder
@@ -1032,7 +1036,7 @@ class MVT(nn.Module):
                 lang_x = x[:, :num_lang_tok]
                 # (B, attn_dim)
                 lang_x = torch.max(lang_x, dim=1)[0]
-            if self.step_lang_type in {6} and self.training:
+            if self.step_lang_type in {6, 8} and self.training:
                 # (B, 77, attn_dim)
                 lang_x = x[:, :num_lang_tok]
                 # (B, 77, 128)
@@ -1057,7 +1061,7 @@ class MVT(nn.Module):
             elif self.step_lang_type == 4:
                 # (b, lang_emb_dim)
                 step_lang_prediction = self.step_lang_pred_layer(lang_x)
-            elif self.step_lang_type == 5:
+            elif self.step_lang_type in {5, 7}:
                 # (b*num_img, im_channel*np*np)
                 x = rearrange(x, 'b d nv np1 np2 -> (b nv) (d np1 np2)')
                 step_lang_prediction = self.step_lang_pred_layer_1(x)
@@ -1065,11 +1069,20 @@ class MVT(nn.Module):
                 step_lang_prediction = self.step_lang_pred_layer_2(step_lang_prediction.reshape(bs, -1))
                 x = rearrange(x, '(b nv) (d np1 np2) -> b d nv np1 np2',
                               b=bs, nv=self.num_img, d=self.input_dim_before_seq, np1=num_pat_img, np2=num_pat_img)
-            elif self.step_lang_type == 6:
+                if self.step_lang_type == 5:
+                    step_lang_loss_type = 'cosine_sim'
+                elif self.step_lang_type == 7:
+                    step_lang_loss_type = 'contrastive'
+            elif self.step_lang_type in {6, 8}:
                 # (b, lang_emb_dim)
                 step_lang_prediction = self.step_lang_pred_layer(lang_x)
+                if self.step_lang_type == 6:
+                    step_lang_loss_type = 'cosine_sim'
+                elif self.step_lang_type == 8:
+                    step_lang_loss_type = 'contrastive'
         else:
             step_lang_prediction = None
+            step_lang_loss_type = None
 
         x = (
             x.transpose(1, 2)
@@ -1205,6 +1218,9 @@ class MVT(nn.Module):
 
         out.update({"trans": trans})
         out.update({"step_lang_prediction": step_lang_prediction})
+        out.update({"step_lang_loss_type": step_lang_loss_type})
+        if hasattr(self, 'logit_scale'):
+            out.update({"logit_scale": self.logit_scale})
 
         return out
 

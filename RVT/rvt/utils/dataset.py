@@ -12,11 +12,14 @@ import pickle
 import logging
 import numpy as np
 from typing import List
+import json
+import re
+import socket
 
 import clip
 import peract_colab.arm.utils as utils
 
-from peract_colab.rlbench.utils import get_stored_demo
+from peract_colab.rlbench.utils import get_stored_demo, EPISODE_FOLDER
 from yarr.utils.observation_type import ObservationElement
 from yarr.replay_buffer.replay_buffer import ReplayElement, ReplayBuffer
 from yarr.replay_buffer.uniform_replay_buffer import UniformReplayBuffer
@@ -363,6 +366,10 @@ def fill_replay(
     clip_model=None,
     device="cpu",
 ):
+    # TODO:find better way for running on a cluster.
+    current_node = socket.gethostname()
+    task_replay_storage_folder = f'/bd_{current_node}/users/jhu/{task_replay_storage_folder}'
+    print(f'use {task_replay_storage_folder} as the replay storage folder')
 
     disk_exist = False
     if replay._disk_saving:
@@ -395,35 +402,37 @@ def fill_replay(
 
             # extract keypoints
             episode_keypoints = keypoint_discovery(demo)
-            # print(episode_keypoints)
-            print(descs[0])
+            print(descs[0]+'. Episode keypoints: ')
+            print(episode_keypoints)
 
-            # TODO: use llm for processing the language instruction
-            # if task == 'close_box':
-            #     step_descs = ['grasp the lid', 'grasp the lid', 'close', 'release', 'release']
-            #     del episode_keypoints[0]
-            #     del episode_keypoints[2]
-            # elif task == 'close_laptop_lid':
-            #     step_descs = ['grasp the lid', 'close', 'close', 'release']
-            #     del episode_keypoints[1]
-            if task == 'close_box':
-                step_descs = ['approaching', 'grasp', 'close', 'release', 'release']
-            elif task == 'close_laptop_lid':
-                step_descs = ['grasp', 'close', 'close',  'release']
-            elif task == 'stack_cups':
-                step_descs = ['approaching', 'grasp', 'lift', 'move', 'release',
-                              'approaching', 'grasp', 'lift', 'move', 'release']
-            # if task == 'close_box':
-            #     step_descs = ['approaching the lid', 'grasp the lid', 'close the lid',
-            #                   'release the gripper', 'release the gripper']
-            # elif task == 'close_laptop_lid':
-            #     step_descs = ['grasp the lid', 'close the lid', 'close the lid',  'release the gripper']
-            # elif task == 'stack_cups':
-            #     step_descs = ['approaching cup 1', 'grasp cup 1', 'lift cup 1', 'move to the target cup', 'release',
-            #                   'approaching cup 2', 'grasp cup 2', 'lift cup 2', 'move to the target cup', 'release']
+            keypoint_path = os.path.join(data_path, EPISODE_FOLDER % d_idx, 'episode_keypoints.npy')
+            lang_goal_path = os.path.join(data_path, EPISODE_FOLDER % d_idx, 'lang_goal.npy')
+            if not os.path.exists(keypoint_path):
+                np.save(keypoint_path, np.array(episode_keypoints))
+                print('save keypoint index to ' + str(keypoint_path))
+            if not os.path.exists(lang_goal_path):
+                print('save language instruction to ' + str(lang_goal_path))
+                np.save(lang_goal_path, np.array([descs[0]]))
+
+            if task in {'stack_cups', 'close_box', 'close_laptop_lid'}:
+                # Specify the path to the JSON file
+                file_path = os.path.join(data_path, EPISODE_FOLDER % d_idx, 'keypoint_response.json')
+                if os.path.exists(file_path):
+                    # Open and load the JSON file
+                    with open(file_path, "r") as file:
+                        data = json.load(file)
+                    # Use regex to find substrings that start with '-' and end with '.'
+                    step_descs = re.findall(r"\*\*Keyframe \d+ to Keyframe \d+\*\*: (.+?)(?=\n|$)", data)
+                    assert len(step_descs) == len(episode_keypoints)
+                    print('load low-level language instruction from llm')
+                else:
+                    print('Warning: the step language instructions for this task are not found !!!!'
+                          'High level language instruction will be used instead.')
+                    step_descs = [descs[0]] * len(episode_keypoints)
             else:
+                print('Warning: the step language instruction for this task is not specified !!!!'
+                      'High level language instruction will be used instead.')
                 step_descs = [descs[0]]*len(episode_keypoints)
-                print('warning: the step language instruction for this task is not specified')
 
             next_keypoint_idx = 0
             for i in range(len(demo) - 1):

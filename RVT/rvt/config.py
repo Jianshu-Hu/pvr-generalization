@@ -19,6 +19,7 @@ _C.num_workers = 0
 _C.sample_distribution_mode = 'transition_uniform'
 _C.train_iter = 16 * 10000
 _C.verbose = False
+_C.num_episodes = 100
 
 # arguments present in both peract and rvt
 # some of them donot support every possible combination in peract
