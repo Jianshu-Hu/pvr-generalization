@@ -18,6 +18,7 @@ RVT/rvt/runs/
 RVT/rvt/saved_runs/
 RVT/rvt/replay
 RVT/rvt/test
+RVT/rvt/tmp
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

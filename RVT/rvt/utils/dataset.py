@@ -128,6 +128,14 @@ def create_replay(
                 np.float32,
             ),
             ReplayElement(
+                "step_tokens_embs",
+                (
+                    max_token_seq_len,
+                    lang_emb_dim,
+                ),  # extracted from CLIP's language encoder
+                np.float32,
+            ),
+            ReplayElement(
                 "step_single_embs",
                 (
                     lang_feat_dim,
@@ -290,6 +298,10 @@ def _add_keypoints_to_replay(
         step_desc_tokens_tensor = torch.from_numpy(step_desc_tokens).to(device)
 
         with torch.no_grad():
+            _, step_tokens_embs = _clip_encode_text(clip_model, step_desc_tokens_tensor)
+        obs_dict["step_tokens_embs"] = step_tokens_embs[0].float().detach().cpu().numpy()
+
+        with torch.no_grad():
             step_single_embs = clip_model.encode_text(step_desc_tokens_tensor)
         obs_dict["step_single_embs"] = step_single_embs[0].float().detach().cpu().numpy()
 
@@ -340,6 +352,7 @@ def _add_keypoints_to_replay(
         episode_length=25,
     )
     obs_dict_tp1["lang_goal_embs"] = lang_embs[0].float().detach().cpu().numpy()
+    obs_dict_tp1["step_tokens_embs"] = step_tokens_embs[0].float().detach().cpu().numpy()
     obs_dict_tp1["step_single_embs"] = step_single_embs[0].float().detach().cpu().numpy()
 
     obs_dict_tp1.pop("wrist_world_to_cam", None)

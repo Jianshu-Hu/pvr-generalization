@@ -367,6 +367,7 @@ class MVT(nn.Module):
         proprio=None,
         lang_emb=None,
         step_single_embs=None,
+        step_tokens_embs=None,
         step_lang_goal=None,
         lang_goal=None,
         img_aug=0,
@@ -382,6 +383,7 @@ class MVT(nn.Module):
         :param lang_emb: tensor of shape (bs, lang_len, lang_dim)
         :param lang_goal: (bs, 1), language goal
         :param step_single_embs: tensor of shape (bs, another_lang_dim)
+        :param step_tokens_embs: tensor of shape (bs, lang_len, lang_dim)
         :param step_lang_goal: (bs, 1), step language goal
         :param img_aug: (float) magnitude of augmentation in rgb image
         :param wpt_local: gt location of the wpt in 3D, tensor of shape
@@ -484,6 +486,7 @@ class MVT(nn.Module):
             proprio=proprio,
             lang_emb=lang_emb,
             step_single_embs=step_single_embs,
+            step_tokens_embs=step_tokens_embs,
             step_lang_goal=step_lang_goal,
             lang_goal=lang_goal,
             wpt_local=wpt_local_stage_one,
@@ -541,6 +544,7 @@ class MVT(nn.Module):
                 proprio=proprio,
                 lang_emb=lang_emb,
                 step_single_embs=step_single_embs,
+                step_tokens_embs=step_tokens_embs,
                 step_lang_goal=step_lang_goal,
                 lang_goal=lang_goal,
                 wpt_local=wpt_local2,

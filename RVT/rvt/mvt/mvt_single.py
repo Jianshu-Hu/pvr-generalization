@@ -264,85 +264,8 @@ class MVT(nn.Module):
                 output = self.pretrained_image_encoder.forward_features(random_img)
                 feature = output['x_norm_patchtokens']
                 img_emb_dim = feature.size(2)
-            if self.pre_image_process == 1:
-                # simply use process patch features
-                inp_pre_out_dim -= 3
 
-                self.img_compress_fc = DenseBlock(
-                    img_emb_dim,
-                    int(self.im_channels/2),
-                    norm="group",
-                    activation=activation,
-                )
-
-                self.patchify = Conv2DBlock(
-                    inp_pre_out_dim,
-                    int(self.im_channels/2),
-                    kernel_sizes=self.img_patch_size,
-                    strides=self.img_patch_size,
-                    norm="group",
-                    activation=activation,
-                    padding=0,
-                )
-            elif self.pre_image_process == 2:
-                # relate 3d patch features using corr
-                self.patchify = Conv2DBlock(
-                    self.num_img*img_emb_dim,
-                    self.im_channels,
-                    kernel_sizes=self.img_patch_size,
-                    strides=self.img_patch_size,
-                    norm="group",
-                    activation=activation,
-                    padding=0,
-                )
-            elif self.pre_image_process == 3:
-                # relate 3d patch features using corr and average locally
-                self.img_compress_fc = DenseBlock(
-                    self.num_img*img_emb_dim,
-                    self.im_channels,
-                    norm="group",
-                    activation=activation,
-                )
-                self.pool = nn.AdaptiveAvgPool2d(spatial_size)
-            elif self.pre_image_process == 4:
-                self.grounding_heat_map = GroundingDinoHeatMap()
-                print('Use grounding dino for extracting features.')
-                self.resize = torchvision.transforms.Resize([self.img_size, self.img_size])
-
-                self.img_compress_fc = DenseBlock(
-                    img_emb_dim*2,
-                    int(self.im_channels/2),
-                    norm="group",
-                    activation=activation,
-                )
-                inp_pre_out_dim -= 4
-                self.patchify = Conv2DBlock(
-                    inp_pre_out_dim,
-                    int(self.im_channels/2),
-                    kernel_sizes=self.img_patch_size,
-                    strides=self.img_patch_size,
-                    norm="group",
-                    activation=activation,
-                    padding=0,
-                )
-            elif self.pre_image_process == 5:
-                self.img_compress_fc = DenseBlock(
-                    img_emb_dim*2,
-                    int(self.im_channels/2),
-                    norm="group",
-                    activation=activation,
-                )
-                inp_pre_out_dim -= 4
-                self.patchify = Conv2DBlock(
-                    inp_pre_out_dim,
-                    int(self.im_channels/2),
-                    kernel_sizes=self.img_patch_size,
-                    strides=self.img_patch_size,
-                    norm="group",
-                    activation=activation,
-                    padding=0,
-                )
-            elif self.pre_image_process == 6:
+            if self.pre_image_process == 6:
                 self.img_compress_fc = DenseBlock(
                     img_emb_dim*2,
                     int(self.im_channels),
@@ -425,66 +348,88 @@ class MVT(nn.Module):
             )
 
         if self.step_lang_type > 0:
-            print(f'use per-step language instruction to help improve the generalization across tasks,'
-                  f' and use type {self.step_lang_type}.')
-            if self.step_lang_type == 2:
-                # align the max visual feature with the step language instruction feature
-                self.step_lang_pred_layer = nn.Sequential(
-                    DenseBlock(
+            if self.step_lang_type == 9:
+                assert self.self_cross_ver == 2
+                if self.no_feat:
+                    # this is only used in stage one
+                    self.new_pos_encoding = nn.Parameter(
+                        torch.randn(
+                            1,
+                            num_pe_token,
+                            self.input_dim_before_seq,
+                        )
+                    )
+                    self.new_lang_preprocess = DenseBlock(
+                        lang_emb_dim,
+                        self.im_channels * 2,
+                        norm="group",
+                        activation=activation,
+                    )
+                    self.new_fc_bef_attn = DenseBlock(
+                        self.input_dim_before_seq,
+                        attn_dim,
+                        norm=None,
+                        activation=None,
+                    )
+                    self.new_fc_aft_attn = DenseBlock(
+                        attn_dim,
+                        self.input_dim_before_seq,
+                        norm=None,
+                        activation=None,
+                    )
+                    print(f'use per-step language instruction to help improve the generalization across tasks,'
+                          f' and use type {self.step_lang_type}.')
+                else:
+                    self.step_lang_type = 0
+            elif self.step_lang_type == 14:
+                if not self.no_feat:
+                    # this is only used in stage two
+                    # align waypoint visual patch feature with the step language instruction feature
+                    self.step_lang_pred_layer = DenseBlock(
                         self.num_img * self.im_channels * 2,
-                        self.im_channels * 4,
-                        norm="group",
-                        activation=activation,),
-                    DenseBlock(
-                        self.im_channels * 4,
-                        lang_emb_dim*2,
+                        lang_emb_dim * 2,
                         norm="layer",
-                        activation=activation,)
-                )
-            elif self.step_lang_type == 4:
-                # align the max language feature with the step language instruction feature
-                self.step_lang_pred_layer = nn.Sequential(
-                    DenseBlock(
-                        attn_dim,
-                        attn_dim,
-                        norm="group",
-                        activation=activation,),
-                    DenseBlock(
-                        attn_dim,
-                        lang_emb_dim*2,
-                        norm="layer",
-                        activation=activation,)
-                )
-            elif self.step_lang_type in {5, 7}:
-                # align all visual patch feature with the step language instruction feature
-                self.step_lang_pred_layer_1 = DenseBlock(
-                        spatial_size**2 * self.im_channels * 2,
-                        self.im_channels * 2,
-                        norm="group",
-                        activation=activation,)
-                self.step_lang_pred_layer_2 = DenseBlock(
+                        activation=None,)
+                    print(f'use per-step language instruction to help improve the generalization across tasks,'
+                          f' and use type {self.step_lang_type}.')
+                else:
+                    self.step_lang_type = 0
+            elif self.step_lang_type == 17:
+                if self.no_feat:
+                    # this is only used in stage one
+                    # align waypoint visual patch feature before attention with the step language instruction feature
+                    self.step_lang_pred_layer = DenseBlock(
                         self.num_img * self.im_channels * 2,
-                        lang_emb_dim*2,
+                        lang_emb_dim * 2,
                         norm="layer",
-                        activation=activation,)
-                if self.step_lang_type == 7:
-                    self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
-            elif self.step_lang_type in {6, 8}:
-                # align all language patch features with the step language instruction feature
-                self.step_lang_pred_layer = nn.Sequential(
-                    DenseBlock(
-                        77 * self.im_channels * 2,
-                        self.im_channels * 2,
-                        norm="group",
-                        activation=activation,),
-                    DenseBlock(
-                        self.im_channels * 2,
-                        lang_emb_dim*2,
+                        activation=None,)
+                    print(f'use per-step language instruction to help improve the generalization across tasks,'
+                          f' and use type {self.step_lang_type}.')
+                else:
+                    self.step_lang_type = 0
+            elif self.step_lang_type == 18:
+                if not self.no_feat:
+                    # this is only used in stage two
+                    # align waypoint visual patch feature before attention with the step language instruction feature
+                    self.step_lang_pred_layer = DenseBlock(
+                        self.num_img * self.im_channels * 2,
+                        lang_emb_dim * 2,
                         norm="layer",
-                        activation=activation,)
-                )
-                if self.step_lang_type == 8:
-                    self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
+                        activation=None,)
+                    print(f'use per-step language instruction to help improve the generalization across tasks,'
+                          f' and use type {self.step_lang_type}.')
+                else:
+                    self.step_lang_type = 0
+            elif self.step_lang_type == 19:
+                # this is only used in both stage one and stage two
+                # align waypoint visual patch feature before attention with the step language instruction feature
+                self.step_lang_pred_layer = DenseBlock(
+                    self.num_img * self.im_channels * 2,
+                    lang_emb_dim * 2,
+                    norm="layer",
+                    activation=None,)
+                print(f'use per-step language instruction to help improve the generalization across tasks,'
+                      f' and use type {self.step_lang_type}.')
 
         if self.add_proprio:
             # proprio preprocessing encoder
@@ -658,6 +603,7 @@ class MVT(nn.Module):
         proprio=None,
         lang_emb=None,
         step_single_embs=None,
+        step_tokens_embs=None,
         step_lang_goal=None,
         lang_goal=None,
         wpt_local=None,
@@ -670,6 +616,7 @@ class MVT(nn.Module):
         :param lang_emb: tensor of shape (bs, lang_len, lang_dim)
         :param lang_goal: (bs, 1), language goal
         :param step_single_embs: tensor of shape (bs, another_lang_dim)
+        :param step_tokens_embs: tensor of shape (bs, lang_len, lang_dim)
         :param step_lang_goal: (bs, 1), language goal
         :param img_aug: (float) magnitude of augmentation in rgb image
         :param rot_x_y: (bs, 2)
@@ -688,162 +635,7 @@ class MVT(nn.Module):
         # (bs * num_img, im_channels, h, w)
         d0 = self.input_preprocess(img)
 
-        if self.pre_image_process == 1:
-            # process the RGB image with pretrained image encoder
-            with torch.no_grad():
-                # for now, we only consider the situation of combining (corr, rgbd, xyz)
-                assert d0.size(1) == 10
-                # (bs * num_img, 3, h, w)
-                rgb_views_image = d0[:, 3:6, :, :]
-                # (bs * num_img, 7, h, w)
-                remaining_info = torch.cat((d0[:, 0:3, :, :], d0[:, 6:, :, :]), dim=1)
-                # (bs * num_img, num_p*num_p, d)
-                processed_image_patches = (self.pretrained_image_encoder.forward_features(
-                    rgb_views_image))['x_norm_patchtokens']
-                # (bs * num_img * num_p*num_p, d)
-                processed_image_patches = processed_image_patches.reshape(-1, processed_image_patches.size(-1))
-
-            # (bs * num_img * num_p * num_p, im_channel/2)
-            ins_rgb = self.img_compress_fc(processed_image_patches)
-            # (bs, num_img, num_p, num_p, im_channel/2)
-            ins_rgb = rearrange(ins_rgb, "(b n p1 p2) ... -> b n p1 p2 ...", b=bs, n=num_img,
-                                p1=num_pat_img, p2=num_pat_img)
-            # (bs, num_img, im_channel/2, num_p, num_p)
-            ins_rgb = ins_rgb.permute(0, 1, 4, 2, 3)
-
-            # (bs*num_img, im_channel/2, num_p, num_p)
-            ins_others = self.patchify(remaining_info)
-            # (bs, num_img, im_channel/2, num_p, num_p)
-            ins_others = rearrange(ins_others, "(b n) ... -> b n ...", b=bs, n=num_img)
-
-            # (bs, num_img, im_channel, num_p, num_p)
-            ins = torch.concat((ins_rgb, ins_others), dim=2)
-            # (bs, im_channel, num_img, num_p, num_p)
-            ins = ins.transpose(1, 2)
-        elif self.pre_image_process == 2:
-            # relate 3d patch features using corr
-            with torch.no_grad():
-                # for now, we only consider the situation of combining (corr, rgbd, xyz)
-                assert d0.size(1) == 10
-                # (bs * num_img, 3, h, w)
-                rgb_views_image = d0[:, 3:6, :, :]
-                # (bs, num_img, 3, h, w)
-                corr = d0[:, 0:3, :, :].reshape(bs, num_img, 3, h, w)
-                # (bs * num_img, num_p*num_p, d)
-                processed_image_patches = (self.pretrained_image_encoder.forward_features(
-                    rgb_views_image))['x_norm_patchtokens']
-                # (bs * num_img * num_p*num_p, d)
-                processed_image_patches = processed_image_patches.reshape(-1, processed_image_patches.size(-1))
-                # (bs, num_img, num_p, num_p, d)
-                processed_image_patches = rearrange(processed_image_patches, "(b n p1 p2) ... -> b n p1 p2 ...",
-                                                    b=bs, n=num_img, p1=num_pat_img, p2=num_pat_img)
-
-                # map global corr to image loc
-                # (bs, num_img*h*w, num_img, 2)
-                img_loc = self.get_pt_loc_on_img(rearrange(corr, "b n x h w-> b (n h w) x"), dyn_cam_info=None)
-                img_loc = torch.where(img_loc < 0, 0, img_loc)
-                img_loc = torch.where(img_loc >= h, h-1, img_loc)
-                # (num_img*h*w, bs, num_img, 2)
-                img_patch_loc = (img_loc//self.img_patch_size).to(torch.int).permute(1, 0, 2, 3)
-
-                # get pixel-wise feature according to image loc
-                bs_ind = torch.arange(bs).unsqueeze(1).repeat(1, num_img)
-                num_img_ind = torch.arange(num_img).unsqueeze(0).repeat(bs, 1)
-                # (num_img*h*w, bs, num_img, d)
-                lifted_3d_img_feature = processed_image_patches[bs_ind, num_img_ind,
-                                                                img_patch_loc[:, :, :, 0], img_patch_loc[:, :, :, 1], :]
-                # (num_img*h*w, bs, num_img*d)
-                lifted_3d_img_feature = lifted_3d_img_feature.reshape(num_img*h*w, bs, -1)
-                # (bs*num_img, num_img*d, h, w)
-                lifted_3d_img_feature = rearrange(lifted_3d_img_feature, "(n h w) b d -> (b n) d h w",
-                                                  n=num_img, h=h, w=w)
-                # # (num_img*h*w, bs, d)
-                # lifted_3d_img_feature = torch.mean(lifted_3d_img_feature, dim=2)
-                # # (bs*num_img, d, h, w)
-                # lifted_3d_img_feature = rearrange(lifted_3d_img_feature, "(n h w) b d -> (b n) d h w",
-                #                                   n=num_img, h=h, w=w)
-
-            # (bs*num_img, im_channel, num_p, num_p)
-            ins = self.patchify(lifted_3d_img_feature)
-            # (bs, num_img, im_channel, num_p, num_p)
-            ins = rearrange(ins, "(b n) ... -> b n ...", b=bs, n=num_img)
-            # (bs, im_channel, num_img, num_p, num_p)
-            ins = ins.transpose(1, 2)
-        elif self.pre_image_process == 3:
-            # relate 3d patch features using corr and use average pooling for reducing the size of features
-            with torch.no_grad():
-                # for now, we only consider the situation of combining (corr, rgbd, xyz)
-                assert d0.size(1) == 10
-                # (bs * num_img, 3, h, w)
-                rgb_views_image = d0[:, 3:6, :, :]
-                # (bs, num_img, 3, h, w)
-                corr = d0[:, 0:3, :, :].reshape(bs, num_img, 3, h, w)
-                # (bs * num_img, num_p*num_p, d)
-                processed_image_patches = (self.pretrained_image_encoder.forward_features(
-                    rgb_views_image))['x_norm_patchtokens']
-                # (bs * num_img * num_p*num_p, d)
-                processed_image_patches = processed_image_patches.reshape(-1, processed_image_patches.size(-1))
-                # (bs, num_img, num_p, num_p, d)
-                processed_image_patches = rearrange(processed_image_patches, "(b n p1 p2) ... -> b n p1 p2 ...",
-                                                    b=bs, n=num_img, p1=num_pat_img, p2=num_pat_img)
-
-                # map global corr to image loc
-                # (bs, num_img*h*w, 3)
-                corr = rearrange(corr, "b n x h w-> b (n h w) x")
-                # after rendering, pixels which do not have corresponding points will be assigned zeros in corr.
-                corr_filter = (corr[:, :, 0] == 0) & (corr[:, :, 1] == 0) & (corr[:, :, 2] == 0)  # (bs, num_img*h*w)
-                # (bs, num_img*h*w, num_img, 2)
-                img_loc = self.get_pt_loc_on_img(corr, dyn_cam_info=None)
-                img_loc = torch.where(img_loc < 0, 0, img_loc)
-                img_loc = torch.where(img_loc >= h, h-1, img_loc)
-                # (num_img*h*w, bs, num_img, 2)
-                img_patch_loc = (img_loc//self.img_patch_size).to(torch.int).permute(1, 0, 2, 3)
-
-                # get pixel-wise feature according to image loc
-                bs_ind = torch.arange(bs).unsqueeze(1).repeat(1, num_img)
-                num_img_ind = torch.arange(num_img).unsqueeze(0).repeat(bs, 1)
-
-                if bs > 1:
-                    divide_bs = 8
-                else:
-                    divide_bs = 1
-                assert bs % divide_bs == 0
-                img_patch_loc = rearrange(img_patch_loc, 'x (s b) ...->x s b ...', s=divide_bs)
-                bs_ind = rearrange(bs_ind, '(s b) ...->s b ...', s=divide_bs)
-                num_img_ind = rearrange(num_img_ind, '(s b) ...->s b ...', s=divide_bs)
-                corr_filter = rearrange(corr_filter, '(s b) d->d s b', s=divide_bs)
-
-                all_3D_feature = []
-                # due to memory limit, divide the batch
-                for i in range(divide_bs):
-                    # get pixel-wise feature according to image loc
-                    # (num_img*h*w, small_bs, num_img, d)
-                    lifted_3d_img_feature = processed_image_patches[bs_ind[i], num_img_ind[i],
-                                            img_patch_loc[:, i, :, :, 0], img_patch_loc[:, i, :, :, 1], :]
-                    lifted_3d_img_feature[corr_filter[:, i]] = torch.zeros(num_img,
-                                                                        lifted_3d_img_feature.size(-1)).to(corr.device)
-                    # (small_bs*num_img*num_img, d, h, w)
-                    lifted_3d_img_feature = rearrange(lifted_3d_img_feature, '(n1 h w) b n2 d->(b n1 n2) d h w',
-                                                      n1=num_img, h=h, w=w)
-                    # (small_bs*num_img*num_img, d, np, np)
-                    lifted_3d_img_feature = self.pool(lifted_3d_img_feature)
-                    # (small_bs, num_img, num_img*d, np, np)
-                    lifted_3d_img_feature = rearrange(lifted_3d_img_feature,
-                                                      '(b n1 n2) d ... -> b n1 (n2 d) ...', n1=self.num_img, n2=self.num_img)
-                    all_3D_feature.append(lifted_3d_img_feature)
-
-                # (bs, num_img, num_img*d, np, np)
-                all_3D_feature = torch.concat(all_3D_feature, dim=0)
-                # (bs*num_img*np*np, num_img*d)
-                all_3D_feature = rearrange(all_3D_feature, 'b n d p1 p2-> (b n p1 p2) d')
-
-            # (bs*num_img*np*np, im_channel)
-            ins = self.img_compress_fc(all_3D_feature)
-            # (bs, num_img, im_channel, num_p, num_p)
-            ins = rearrange(ins, "(b n p1 p2) d -> b n d p1 p2", b=bs, n=num_img, p1=num_pat_img, p2=num_pat_img)
-            # (bs, im_channel, num_img, num_p, num_p)
-            ins = ins.transpose(1, 2)
-        elif self.pre_image_process == 6:
+        if self.pre_image_process == 6:
             # process rgb and depth image with DINO, use other info as position embedding
             with torch.no_grad():
                 # (bs * num_img, 3, h, w)
@@ -966,6 +758,36 @@ class MVT(nn.Module):
             p = p.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).repeat(1, 1, _d, _h, _w)
             ins = torch.cat([ins, p], dim=1)  # [B, 128, num_img, np, np]
 
+        if self.training and self.step_lang_type in {17, 18, 19}:
+            # projection
+            # (bs, 1, num_img, 2)
+            wpt_img = self.get_pt_loc_on_img(
+                wpt_local.unsqueeze(1),
+                dyn_cam_info=None,
+            )
+            wpt_img = wpt_img.reshape(bs * self.num_img, 2)
+
+            # add noise to wpt image while training
+            wpt_img = mvt_utils.add_uni_noi(
+                wpt_img, self.wpt_img_aug * self.img_size
+            )
+            wpt_img = torch.clamp(wpt_img, 0, self.img_size - 1)
+
+            _wpt_img = wpt_img / self.img_patch_size
+            _u = rearrange(ins.clone(), 'b d nv ... ->(b nv) d ...')
+            assert (
+                    0 <= _wpt_img.min() and _wpt_img.max() <= _u.shape[-1]
+            ), print(_wpt_img, _u.shape)
+
+            _wpt_img = _wpt_img.unsqueeze(1)
+            align_feat = select_feat_from_hm(_wpt_img, _u)[0]
+            align_feat = align_feat.view(bs, -1)
+            step_lang_prediction = self.step_lang_pred_layer(align_feat)
+            step_lang_loss_type = "cosine_sim"
+        else:
+            step_lang_prediction = None
+            step_lang_loss_type = None
+
         # channel last
         ins = rearrange(ins, "b d ... -> b ... d")  # [B, num_img, np, np, 128]
 
@@ -975,32 +797,72 @@ class MVT(nn.Module):
         # flatten patches into sequence
         ins = rearrange(ins, "b ... d -> b (...) d")  # [B, num_img * np * np, 128]
 
+        if self.step_lang_type == 9:
+            # (bs, num_img * np * np, 128)
+            ins_new = ins.clone().detach()
+
         # add learable pos encoding
         # only added to image tokens
         if self.pe_fix:
-            ins += self.pos_encoding
+            if self.step_lang_type == 9:
+                if self.training:
+                    ins += self.pos_encoding
+                    ins_new += self.new_pos_encoding
+                else:
+                    ins_new += self.new_pos_encoding
+            else:
+                ins += self.pos_encoding
 
         # append language features as sequence
         num_lang_tok = 0
         if self.add_lang:
-            l = self.lang_preprocess(
-                lang_emb.view(bs * self.lang_max_seq_len, self.lang_emb_dim)
-            )
-            l = l.view(bs, self.lang_max_seq_len, -1)
-            num_lang_tok = l.shape[1]
-            ins = torch.cat((l, ins), dim=1)  # [B, num_img * np * np + 77, 128]
+            if self.step_lang_type == 9:
+                if self.training:
+                    l = self.lang_preprocess(
+                        step_tokens_embs.view(bs * self.lang_max_seq_len, self.lang_emb_dim)
+                    )
+                    l = l.view(bs, self.lang_max_seq_len, -1)
+                    ins = torch.cat((l, ins), dim=1)  # [B, num_img * np * np + 77, 128]
+
+                l_new = self.new_lang_preprocess(
+                    lang_emb.view(bs * self.lang_max_seq_len, self.lang_emb_dim)
+                )
+                l_new = l_new.view(bs, self.lang_max_seq_len, -1)
+                num_lang_tok = l_new.shape[1]
+                ins_new = torch.cat((l_new, ins_new), dim=1)  # [B, num_img * np * np + 77, 128]
+            else:
+                l = self.lang_preprocess(
+                    lang_emb.view(bs * self.lang_max_seq_len, self.lang_emb_dim)
+                )
+                l = l.view(bs, self.lang_max_seq_len, -1)
+                num_lang_tok = l.shape[1]
+                ins = torch.cat((l, ins), dim=1)  # [B, num_img * np * np + 77, 128]
 
         # add learnable pos encoding
         if not self.pe_fix:
-            ins = ins + self.pos_encoding
+            if self.step_lang_type == 9:
+                if self.training:
+                    ins += self.pos_encoding
+                    ins_new += self.new_pos_encoding
+                else:
+                    ins_new += self.new_pos_encoding
+            else:
+                ins += self.pos_encoding
 
-        x = self.fc_bef_attn(ins)
+        if self.step_lang_type == 9:
+            if self.training:
+                x = self.fc_bef_attn(ins)
+                x_new = self.new_fc_bef_attn(ins_new)
+            else:
+                x_new = self.new_fc_bef_attn(ins_new)
+        else:
+            x = self.fc_bef_attn(ins)
+
         if self.self_cross_ver == 0:
             # self-attention layers
             for self_attn, self_ff in self.layers:
                 x = self_attn(x) + x
                 x = self_ff(x) + x
-
         elif self.self_cross_ver == 1:
             lx, imgx = x[:, :num_lang_tok], x[:, num_lang_tok:]
 
@@ -1019,31 +881,54 @@ class MVT(nn.Module):
         elif self.self_cross_ver == 2:
             assert self.pre_image_process > 0
             # we do not need within image self attention
-
-            # cross attention
-            for self_attn, self_ff in self.layers[len(self.layers) // 2 :]:
-                x = self_attn(x) + x
-                x = self_ff(x) + x
+            if self.step_lang_type == 9:
+                if self.training:
+                    # cross attention
+                    for self_attn, self_ff in self.layers[:len(self.layers) // 2]:
+                        x = self_attn(x) + x
+                        x = self_ff(x) + x
+                    for self_attn, self_ff in self.layers[len(self.layers) // 2:]:
+                        x_new = self_attn(x_new) + x_new
+                        x_new = self_ff(x_new) + x_new
+                else:
+                    for self_attn, self_ff in self.layers[len(self.layers) // 2:]:
+                        x_new = self_attn(x_new) + x_new
+                        x_new = self_ff(x_new) + x_new
+            else:
+                # cross attention
+                for self_attn, self_ff in self.layers[len(self.layers) // 2:]:
+                    x = self_attn(x) + x
+                    x = self_ff(x) + x
         else:
             assert False
 
         # append language features as sequence
         if self.add_lang:
             # throwing away the language embeddings
-            x = x[:, num_lang_tok:]
-            if self.step_lang_type in {4} and self.training:
-                # (B, 77, attn_dim)
-                lang_x = x[:, :num_lang_tok]
-                # (B, attn_dim)
-                lang_x = torch.max(lang_x, dim=1)[0]
-            if self.step_lang_type in {6, 8} and self.training:
-                # (B, 77, attn_dim)
-                lang_x = x[:, :num_lang_tok]
-                # (B, 77, 128)
-                lang_x = self.fc_aft_attn(lang_x)
-                # (B, 77*128)
-                lang_x = lang_x.view(bs, -1)
-        x = self.fc_aft_attn(x)
+            if self.step_lang_type == 9:
+                if self.training:
+                    x = x[:, num_lang_tok:]
+                    x_new = x_new[:, num_lang_tok:]
+                else:
+                    x_new = x_new[:, num_lang_tok:]
+            else:
+                x = x[:, num_lang_tok:]
+
+        if self.step_lang_type == 9:
+            if self.training:
+                x = self.fc_aft_attn(x)
+                x_new = self.new_fc_aft_attn(x_new)
+                original_feat = x.clone().detach()
+                mimic_feat = x_new
+            else:
+                x = self.new_fc_aft_attn(x_new)
+                original_feat = None
+                mimic_feat = None
+        else:
+            x = self.fc_aft_attn(x)
+            original_feat = None
+            mimic_feat = None
+
 
         # reshape back to original size
         x = x.view(bs, *ins_orig_shape[1:-1], x.shape[-1])  # [B, num_img, np, np, 128]
@@ -1053,36 +938,6 @@ class MVT(nn.Module):
         _feat = torch.max(torch.max(x, dim=-1)[0], dim=-1)[0]
         _feat = _feat.view(bs, -1)
         feat.append(_feat)
-
-        if self.training and self.step_lang_type > 0:
-            if self.step_lang_type == 2:
-                # (b, lang_emb_dim)
-                step_lang_prediction = self.step_lang_pred_layer(_feat)
-            elif self.step_lang_type == 4:
-                # (b, lang_emb_dim)
-                step_lang_prediction = self.step_lang_pred_layer(lang_x)
-            elif self.step_lang_type in {5, 7}:
-                # (b*num_img, im_channel*np*np)
-                x = rearrange(x, 'b d nv np1 np2 -> (b nv) (d np1 np2)')
-                step_lang_prediction = self.step_lang_pred_layer_1(x)
-                # (b, lang_emb_dim)
-                step_lang_prediction = self.step_lang_pred_layer_2(step_lang_prediction.reshape(bs, -1))
-                x = rearrange(x, '(b nv) (d np1 np2) -> b d nv np1 np2',
-                              b=bs, nv=self.num_img, d=self.input_dim_before_seq, np1=num_pat_img, np2=num_pat_img)
-                if self.step_lang_type == 5:
-                    step_lang_loss_type = 'cosine_sim'
-                elif self.step_lang_type == 7:
-                    step_lang_loss_type = 'contrastive'
-            elif self.step_lang_type in {6, 8}:
-                # (b, lang_emb_dim)
-                step_lang_prediction = self.step_lang_pred_layer(lang_x)
-                if self.step_lang_type == 6:
-                    step_lang_loss_type = 'cosine_sim'
-                elif self.step_lang_type == 8:
-                    step_lang_loss_type = 'contrastive'
-        else:
-            step_lang_prediction = None
-            step_lang_loss_type = None
 
         x = (
             x.transpose(1, 2)
@@ -1177,6 +1032,10 @@ class MVT(nn.Module):
             else:
                 assert False, NotImplementedError
 
+            if self.training and self.step_lang_type in {14}:
+                step_lang_prediction = self.step_lang_pred_layer(_feat)
+                step_lang_loss_type = "cosine_sim"
+
             feat.append(_feat)
 
             feat = torch.cat(feat, dim=-1)
@@ -1219,6 +1078,8 @@ class MVT(nn.Module):
         out.update({"trans": trans})
         out.update({"step_lang_prediction": step_lang_prediction})
         out.update({"step_lang_loss_type": step_lang_loss_type})
+        out.update({"original_feat": original_feat})
+        out.update({"mimic_feat": mimic_feat})
         if hasattr(self, 'logit_scale'):
             out.update({"logit_scale": self.logit_scale})
 

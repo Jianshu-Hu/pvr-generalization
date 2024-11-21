@@ -544,6 +544,7 @@ class RVTAgent:
         assert replay_sample["lang_goal"].shape[1:] == (1, 1)
 
         assert replay_sample["step_lang_goal"].shape[1:] == (1, 1)
+        assert replay_sample["step_tokens_embs"].shape[1:] == (1, 77, 512)
         assert replay_sample["step_single_embs"].shape[1:] == (1, 1024)
 
         # sample
@@ -563,6 +564,7 @@ class RVTAgent:
         tasks = replay_sample["tasks"]
 
         step_lang_goal = replay_sample["step_lang_goal"][:, -1]  # (b, 1)
+        step_tokens_embs = replay_sample["step_tokens_embs"][:, -1].float()
         step_single_embs = replay_sample["step_single_embs"][:, -1].float()
 
         proprio = arm_utils.stack_on_channel(replay_sample["low_dim_state"])  # (b, 4)
@@ -668,6 +670,7 @@ class RVTAgent:
                 lang_emb=lang_goal_embs,
                 lang_goal=lang_goal,
                 step_single_embs=step_single_embs,
+                step_tokens_embs=step_tokens_embs,
                 step_lang_goal=step_lang_goal,
                 img_aug=img_aug,
                 wpt_local=wpt_local if self._network.training else None,
@@ -724,31 +727,42 @@ class RVTAgent:
                         collision_q, action_collision_one_hot.argmax(-1)
                     ).mean()
 
-                if out["step_lang_prediction"] is not None:
+                # stage one
+                if out['original_feat'] is not None:
+                    original_feat = out["original_feat"].reshape(bs, -1)
+                    mimic_feat = out["mimic_feat"].reshape(bs, -1)
+                    step_lang_pred_loss = torch.nn.functional.mse_loss(
+                        original_feat, mimic_feat)
+                elif out['step_lang_prediction'] is not None:
                     if out["step_lang_loss_type"] == 'cosine_sim':
-                        # step_lang_pred_loss = -torch.nn.functional.cosine_similarity(
-                        #     out["step_lang_prediction"], step_single_embs, dim=1, eps=1e-8).mean()
-                        if self.stage_two:
-                            step_lang_pred_loss = -torch.nn.functional.cosine_similarity(
-                                out['mvt2']["step_lang_prediction"], step_single_embs, dim=1, eps=1e-8).mean()
-                    elif out["step_lang_loss_type"] == 'contrastive':
+                        step_lang_pred_loss = -torch.nn.functional.cosine_similarity(
+                            out["step_lang_prediction"], step_single_embs, dim=1, eps=1e-8).mean()
+                    else:
+                        raise ValueError('not implemented')
+                else:
+                    step_lang_pred_loss = torch.tensor([0.0]).to(self._device)
+                # stage two
+                if out['mvt2']["step_lang_prediction"] is not None:
+                    if out['mvt2']["step_lang_loss_type"] == 'cosine_sim':
+                        step_lang_pred_loss -= torch.nn.functional.cosine_similarity(
+                            out['mvt2']["step_lang_prediction"], step_single_embs, dim=1, eps=1e-8).mean()
+                    elif out['mvt2']["step_lang_loss_type"] == 'contrastive':
                         # Normalize the feature vectors
-                        visual_features = F.normalize(out["step_lang_prediction"], dim=-1)
+                        visual_features = F.normalize(out['mvt2']["step_lang_prediction"], dim=-1)
                         language_features = F.normalize(step_single_embs, dim=-1)
 
                         # Compute similarity between all visual-language pairs
-                        logits_per_image = out["logit_scale"].exp()*torch.matmul(visual_features, language_features.T)
+                        logits_per_image = out['mvt2']["logit_scale"].exp()*\
+                                           torch.matmul(visual_features, language_features.T)
 
                         # Labels for contrastive learning (positive pairs are on the diagonal)
                         batch_size = visual_features.shape[0]
                         labels = torch.arange(batch_size, device=visual_features.device)
 
                         # Compute the cross-entropy loss
-                        step_lang_pred_loss = F.cross_entropy(logits_per_image, labels)
+                        step_lang_pred_loss += F.cross_entropy(logits_per_image, labels)
                     else:
                         raise ValueError('not implemented')
-                else:
-                    step_lang_pred_loss = torch.tensor([0.0]).to(self._device)
 
                 total_loss = (
                     trans_loss
@@ -869,6 +883,7 @@ class RVTAgent:
             proprio=proprio,
             lang_emb=lang_goal_embs,
             step_single_embs=None,
+            step_tokens_embs=None,
             step_lang_goal=None,
             lang_goal=lang_goal,
             img_aug=0,  # no img augmentation while acting
