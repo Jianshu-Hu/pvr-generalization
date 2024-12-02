@@ -410,6 +410,8 @@ class CustomMultiTaskRLBenchEnv2(CustomMultiTaskRLBenchEnv):
         )[0]
 
         self._task.set_variation(d.variation_number)
+        # TODO: there is a problem here. Although the random seed is set the same as the random seed in the demo, the
+        #  generated observation is still different from the demo.
         desc, obs = self._task.reset_to_demo(d)
         self._lang_goal = desc[0]
 

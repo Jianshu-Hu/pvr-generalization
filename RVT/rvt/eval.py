@@ -300,8 +300,8 @@ def eval(
     scores = []
     for task_id in range(num_tasks):
         task_rewards = []
+        eval_env.launch()
         for ep in range(start_episode, start_episode + eval_episodes):
-            eval_env.launch()
             episode_rollout = []
             generator = rollout_generator.generator(
                 step_signal=step_signal,
@@ -336,7 +336,7 @@ def eval(
                 print(
                     f"Evaluating {task_name} | Episode {ep} | Score: {reward} | Episode Length: {len(episode_rollout)} | Lang Goal: {lang_goal}"
                 )
-            eval_env.shutdown()
+        eval_env.shutdown()
 
         # report summaries
         summaries = []
