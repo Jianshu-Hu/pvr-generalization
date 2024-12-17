@@ -538,19 +538,32 @@ class MVT(nn.Module):
                     mvt1_or_mvt2=False,
                     dyn_cam_info=None,
                 )
-
-            out_mvt2 = self.mvt2(
-                img=img,
-                proprio=proprio,
-                lang_emb=lang_emb,
-                step_single_embs=step_single_embs,
-                step_tokens_embs=step_tokens_embs,
-                step_lang_goal=step_lang_goal,
-                lang_goal=lang_goal,
-                wpt_local=wpt_local2,
-                rot_x_y=rot_x_y,
-                **kwargs,
-            )
+            if self.training:
+                out_mvt2 = self.mvt2(
+                    img=img,
+                    proprio=proprio,
+                    lang_emb=lang_emb,
+                    step_single_embs=step_single_embs,
+                    step_tokens_embs=step_tokens_embs,
+                    step_lang_goal=step_lang_goal,
+                    lang_goal=lang_goal,
+                    wpt_local=wpt_local2,
+                    rot_x_y=rot_x_y,
+                    **kwargs,
+                )
+            else:
+                out_mvt2 = self.mvt2(
+                    img=img,
+                    proprio=proprio,
+                    lang_emb=lang_emb,
+                    step_single_embs=step_single_embs,
+                    step_tokens_embs=out['step_lang_prediction'],
+                    step_lang_goal=step_lang_goal,
+                    lang_goal=lang_goal,
+                    wpt_local=wpt_local2,
+                    rot_x_y=rot_x_y,
+                    **kwargs,
+                )
 
             out["wpt_local1"] = wpt_local_stage_one_noisy
             out["rev_trans"] = rev_trans

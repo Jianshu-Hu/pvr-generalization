@@ -364,7 +364,7 @@ class RVTAgent:
             if self.bnb:
                 print("Using 8-Bit Optimizer")
                 self._optimizer = bnb.optim.LAMB(
-                    self._network.parameters(),
+                    filter(lambda p: p.requires_grad, self._network.parameters()),
                     lr=self._lr,
                     weight_decay=self._lambda_weight_l2,
                     betas=(0.9, 0.999),
@@ -372,7 +372,7 @@ class RVTAgent:
             else:
                 # From: https://github.com/cybertronai/pytorch-lamb/blob/master/pytorch_lamb/lamb.py
                 self._optimizer = Lamb(
-                    self._network.parameters(),
+                    filter(lambda p: p.requires_grad, self._network.parameters()),
                     lr=self._lr,
                     weight_decay=self._lambda_weight_l2,
                     betas=(0.9, 0.999),
@@ -380,7 +380,7 @@ class RVTAgent:
                 )
         elif self._optimizer_type == "adam":
             self._optimizer = torch.optim.Adam(
-                self._network.parameters(),
+                filter(lambda p: p.requires_grad, self._network.parameters()),
                 lr=self._lr,
                 weight_decay=self._lambda_weight_l2,
             )
@@ -730,11 +730,10 @@ class RVTAgent:
                 # stage one
                 if out['step_lang_prediction'] is not None:
                     if out['step_lang_target'] is not None:
-                        step_lang_pred_loss = -torch.nn.functional.cosine_similarity(
-                            out["step_lang_prediction"], out['step_lang_target'], dim=1, eps=1e-8).mean()
-                    else:
-                        step_lang_pred_loss = -torch.nn.functional.cosine_similarity(
-                            out["step_lang_prediction"], step_single_embs, dim=1, eps=1e-8).mean()
+                        # step_lang_pred_loss = -torch.nn.functional.cosine_similarity(
+                        #     out["step_lang_prediction"], out['step_lang_target'], dim=1, eps=1e-8).mean()
+                        step_lang_pred_loss = torch.nn.functional.mse_loss(
+                            out["step_lang_prediction"], out["step_lang_target"])
                 else:
                     step_lang_pred_loss = torch.tensor([0.0]).to(self._device)
 
@@ -743,9 +742,6 @@ class RVTAgent:
                     if out['mvt2']["step_lang_target"] is not None:
                         step_lang_pred_loss -= torch.nn.functional.cosine_similarity(
                             out['mvt2']["step_lang_prediction"], out['mvt2']["step_lang_target"], dim=1, eps=1e-8).mean()
-                    else:
-                        step_lang_pred_loss -= torch.nn.functional.cosine_similarity(
-                            out['mvt2']["step_lang_prediction"], step_single_embs, dim=1, eps=1e-8).mean()
 
                 total_loss = (
                     trans_loss

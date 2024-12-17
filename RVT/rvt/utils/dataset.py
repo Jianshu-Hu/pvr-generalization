@@ -427,25 +427,20 @@ def fill_replay(
                 print('save language instruction to ' + str(lang_goal_path))
                 np.save(lang_goal_path, np.array([descs[0]]))
 
-            if task in {'stack_cups', 'close_box', 'close_laptop_lid'}:
-                # Specify the path to the JSON file
-                file_path = os.path.join(data_path, EPISODE_FOLDER % d_idx, 'keypoint_response.json')
-                if os.path.exists(file_path):
-                    # Open and load the JSON file
-                    with open(file_path, "r") as file:
-                        data = json.load(file)
-                    # Use regex to find substrings that start with '-' and end with '.'
-                    step_descs = re.findall(r"\*\*Keyframe \d+ to Keyframe \d+\*\*: (.+?)(?=\n|$)", data)
-                    assert len(step_descs) == len(episode_keypoints)
-                    print('load low-level language instruction from llm')
-                else:
-                    print('Warning: the step language instructions for this task are not found !!!!'
-                          'High level language instruction will be used instead.')
-                    step_descs = [descs[0]] * len(episode_keypoints)
+            # Specify the path to the JSON file
+            file_path = os.path.join(data_path, EPISODE_FOLDER % d_idx, 'keypoint_response.json')
+            if os.path.exists(file_path):
+                # Open and load the JSON file
+                with open(file_path, "r") as file:
+                    data = json.load(file)
+                # Use regex to find substrings that start with '-' and end with '.'
+                step_descs = re.findall(r"\*\*Keyframe \d+ to Keyframe \d+\*\*: (.+?)(?=\n|$)", data)
+                assert len(step_descs) == len(episode_keypoints)
+                print('load low-level language instruction from llm')
             else:
-                print('Warning: the step language instruction for this task is not specified !!!!'
+                print('Warning: the step language instructions for this task are not found !!!!'
                       'High level language instruction will be used instead.')
-                step_descs = [descs[0]]*len(episode_keypoints)
+                step_descs = [descs[0]] * len(episode_keypoints)
 
             next_keypoint_idx = 0
             for i in range(len(demo) - 1):
