@@ -734,14 +734,11 @@ class RVTAgent:
                         #     out["step_lang_prediction"], out['step_lang_target'], dim=1, eps=1e-8).mean()
                         step_lang_pred_loss = torch.nn.functional.mse_loss(
                             out["step_lang_prediction"], out["step_lang_target"])
+                    if out['mvt2']['step_lang_target'] is not None:
+                        step_lang_pred_loss = torch.nn.functional.mse_loss(
+                            out["step_lang_prediction"], out['mvt2']["step_lang_target"])
                 else:
                     step_lang_pred_loss = torch.tensor([0.0]).to(self._device)
-
-                # stage two
-                if out['mvt2']["step_lang_prediction"] is not None:
-                    if out['mvt2']["step_lang_target"] is not None:
-                        step_lang_pred_loss -= torch.nn.functional.cosine_similarity(
-                            out['mvt2']["step_lang_prediction"], out['mvt2']["step_lang_target"], dim=1, eps=1e-8).mean()
 
                 total_loss = (
                     trans_loss
@@ -818,6 +815,44 @@ class RVTAgent:
             _, lang_goal_embs = _clip_encode_text(self.clip_model, lang_goal_tokens[0])
             lang_goal_embs = lang_goal_embs.float()
             lang_goal = lang_goal
+
+            if self._network.mvt1.step_lang_type in {44}:
+                if not hasattr(self, 'counter'):
+                    self.counter = 0
+                # while os.path.exists(f'img_front_rgb_{self.counter}.npy'):
+                #     self.counter += 1
+                # print(observation['front_rgb'].shape)
+                # np.save(f'img_front_rgb_{self.counter}.npy', observation['front_rgb'].cpu().numpy()[0, 0])
+                # print(f'save to img_front_rgb_{self.counter}.npy')
+                # if self.counter == 5:
+                #     raise ValueError('stop')
+
+                # step_description_list = [
+                #     'The robot arm begins to descend, angling itself towards the chess piece on the board.',
+                #     'The robot arm extends its gripper and successfully engages with the chess piece.',
+                #     'The robot arm lifts the chess piece upward, moving it away from the board.',
+                #     'The robot arm transitions horizontally, carrying the chess piece towards its designated initial position on the board.',
+                #     'The robot arm lowers the chess piece into place and releases it, completing the task of placing the piece on the board.'
+                # ]
+
+                step_description_list = [
+                    "The robot arm moves downwards, positioning itself closer to the ring on the table.",
+                    "The robot arm extends its grip to securely grasp the ring.",
+                    "The robot arm lifts the ring off the table, preparing to move it.",
+                    "The robot arm rotates slightly while moving to align the ring with the red spoke.",
+                    "The robot arm moves downwards and releases the ring onto the red spoke."
+                ]
+                step_description = step_description_list[self.counter % 5]
+                step_desc_tokens = clip.tokenize([step_description]).numpy()
+                step_desc_tokens_tensor = torch.from_numpy(step_desc_tokens).to(self._device)
+
+                self.counter += 1
+
+                with torch.no_grad():
+                    _, step_tokens_embs = _clip_encode_text(self.clip_model, step_desc_tokens_tensor)
+                step_tokens_embs = step_tokens_embs[0].float()
+            else:
+                step_tokens_embs = None
         else:
             lang_goal_embs = (
                 torch.zeros(observation["lang_goal_embs"].shape)
@@ -862,7 +897,7 @@ class RVTAgent:
             proprio=proprio,
             lang_emb=lang_goal_embs,
             step_single_embs=None,
-            step_tokens_embs=None,
+            step_tokens_embs=step_tokens_embs,
             step_lang_goal=None,
             lang_goal=lang_goal,
             img_aug=0,  # no img augmentation while acting

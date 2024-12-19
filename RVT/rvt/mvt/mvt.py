@@ -538,13 +538,14 @@ class MVT(nn.Module):
                     mvt1_or_mvt2=False,
                     dyn_cam_info=None,
                 )
-            if self.training:
+
+            if not self.training and self.mvt1.step_lang_type in {41, 42, 43}:
                 out_mvt2 = self.mvt2(
                     img=img,
                     proprio=proprio,
                     lang_emb=lang_emb,
                     step_single_embs=step_single_embs,
-                    step_tokens_embs=step_tokens_embs,
+                    step_tokens_embs=out['step_lang_prediction'],
                     step_lang_goal=step_lang_goal,
                     lang_goal=lang_goal,
                     wpt_local=wpt_local2,
@@ -557,7 +558,7 @@ class MVT(nn.Module):
                     proprio=proprio,
                     lang_emb=lang_emb,
                     step_single_embs=step_single_embs,
-                    step_tokens_embs=out['step_lang_prediction'],
+                    step_tokens_embs=step_tokens_embs,
                     step_lang_goal=step_lang_goal,
                     lang_goal=lang_goal,
                     wpt_local=wpt_local2,

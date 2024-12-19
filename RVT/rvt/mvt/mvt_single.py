@@ -352,334 +352,7 @@ class MVT(nn.Module):
             )
 
         if self.step_lang_type > 0:
-            # if self.step_lang_type == 34:
-            #     if self.no_feat:
-            #         self.step_lang_type = 28
-            #     else:
-            #         self.step_lang_type = 29
-            if self.step_lang_type == 16:
-                if not self.no_feat:
-                    # this is only used in stage two
-                    # align waypoint visual patch feature after attn with the step language instruction feature
-                    self.step_lang_pred_layer = DenseBlock(
-                        self.num_img * self.im_channels * 2,
-                        self.im_channels * 2,
-                        norm="layer",
-                        activation=None,)
-                    self.step_lang_target_layer = DenseBlock(
-                        lang_emb_dim * 2,
-                        self.im_channels * 2,
-                        norm="layer",
-                        activation=None,)
-                    print(f'use per-step language instruction to help improve the generalization across tasks,'
-                          f' and use type {self.step_lang_type}.')
-                else:
-                    self.step_lang_type = 0
-            elif self.step_lang_type == 28:
-                if self.no_feat:
-                    # this is only used in stage one
-                    # align waypoint visual feature after attn with
-                    # the step language instruction feature after another attn
-                    # use different lang_preprocess_layer
-                    assert self.self_cross_ver == 2
-                    assert self.feat_ver == 1
-                    assert self.cvx_up
-                    self.lang_preprocess_step = DenseBlock(
-                        lang_emb_dim,
-                        self.im_channels * 2,
-                        norm="group",
-                        activation=activation,
-                    )
-                    self.fc_bef_attn_step = DenseBlock(
-                        self.input_dim_before_seq,
-                        attn_dim,
-                        norm=None,
-                        activation=None,
-                    )
-                    self.fc_aft_attn_step = DenseBlock(
-                        attn_dim,
-                        self.input_dim_before_seq,
-                        norm=None,
-                        activation=None,
-                    )
-                    self.step_lang_pred_layer = DenseBlock(
-                        self.num_img * self.im_channels * 2,
-                        self.im_channels * 2,
-                        norm="layer",
-                        activation=None,)
-                    self.step_lang_target_layer = DenseBlock(
-                        self.num_img * self.im_channels * 2,
-                        self.im_channels * 2,
-                        norm="layer",
-                        activation=None,)
-                    print(f'use per-step language instruction to help improve the generalization across tasks,'
-                          f' and use type {self.step_lang_type}.')
-                else:
-                    self.step_lang_type = 0
-            elif self.step_lang_type == 29:
-                if not self.no_feat:
-                    # this is only used in stage two
-                    # align waypoint visual feature after attn with
-                    # the step language instruction feature after another attn
-                    # use different lang_preprocess_layer
-                    assert self.self_cross_ver == 2
-                    assert self.feat_ver == 1
-                    assert self.cvx_up
-                    self.lang_preprocess_step = DenseBlock(
-                        lang_emb_dim,
-                        self.im_channels * 2,
-                        norm="group",
-                        activation=activation,
-                    )
-                    self.fc_bef_attn_step = DenseBlock(
-                        self.input_dim_before_seq,
-                        attn_dim,
-                        norm=None,
-                        activation=None,
-                    )
-                    self.fc_aft_attn_step = DenseBlock(
-                        attn_dim,
-                        self.input_dim_before_seq,
-                        norm=None,
-                        activation=None,
-                    )
-                    self.step_lang_pred_layer = DenseBlock(
-                        self.num_img * self.im_channels * 2,
-                        self.im_channels * 2,
-                        norm="layer",
-                        activation=None,)
-                    self.step_lang_target_layer = DenseBlock(
-                        self.num_img * self.im_channels * 2,
-                        self.im_channels * 2,
-                        norm="layer",
-                        activation=None,)
-                    print(f'use per-step language instruction to help improve the generalization across tasks,'
-                          f' and use type {self.step_lang_type}.')
-                else:
-                    self.step_lang_type = 0
-            elif self.step_lang_type == 30:
-                if self.no_feat:
-                    # this is only used in stage one
-                    # align waypoint visual feature after attn with
-                    # the step language instruction feature after another attn
-                    # use different lang_preprocess_layer and detach the input visual features
-                    assert self.self_cross_ver == 2
-                    assert self.feat_ver == 1
-                    assert self.cvx_up
-                    self.lang_preprocess_step = DenseBlock(
-                        lang_emb_dim,
-                        self.im_channels * 2,
-                        norm="group",
-                        activation=activation,
-                    )
-                    self.fc_bef_attn_step = DenseBlock(
-                        self.input_dim_before_seq,
-                        attn_dim,
-                        norm=None,
-                        activation=None,
-                    )
-                    self.fc_aft_attn_step = DenseBlock(
-                        attn_dim,
-                        self.input_dim_before_seq,
-                        norm=None,
-                        activation=None,
-                    )
-                    self.step_lang_pred_layer = DenseBlock(
-                        self.num_img * self.im_channels * 2,
-                        self.im_channels * 2,
-                        norm="layer",
-                        activation=None,)
-                    self.step_lang_target_layer = DenseBlock(
-                        self.num_img * self.im_channels * 2,
-                        self.im_channels * 2,
-                        norm="layer",
-                        activation=None,)
-                    print(f'use per-step language instruction to help improve the generalization across tasks,'
-                          f' and use type {self.step_lang_type}.')
-                else:
-                    self.step_lang_type = 0
-            elif self.step_lang_type == 31:
-                if not self.no_feat:
-                    # this is only used in stage two
-                    # align waypoint visual feature after attn with
-                    # the step language instruction feature after another attn
-                    # use different lang_preprocess_layer and detach the input visual features
-                    assert self.self_cross_ver == 2
-                    assert self.feat_ver == 1
-                    assert self.cvx_up
-                    self.lang_preprocess_step = DenseBlock(
-                        lang_emb_dim,
-                        self.im_channels * 2,
-                        norm="group",
-                        activation=activation,
-                    )
-                    self.fc_bef_attn_step = DenseBlock(
-                        self.input_dim_before_seq,
-                        attn_dim,
-                        norm=None,
-                        activation=None,
-                    )
-                    self.fc_aft_attn_step = DenseBlock(
-                        attn_dim,
-                        self.input_dim_before_seq,
-                        norm=None,
-                        activation=None,
-                    )
-                    self.step_lang_pred_layer = DenseBlock(
-                        self.num_img * self.im_channels * 2,
-                        self.im_channels * 2,
-                        norm="layer",
-                        activation=None,)
-                    self.step_lang_target_layer = DenseBlock(
-                        self.num_img * self.im_channels * 2,
-                        self.im_channels * 2,
-                        norm="layer",
-                        activation=None,)
-                    print(f'use per-step language instruction to help improve the generalization across tasks,'
-                          f' and use type {self.step_lang_type}.')
-                else:
-                    self.step_lang_type = 0
-            elif self.step_lang_type == 35:
-                if self.no_feat:
-                    # this is only used in stage one
-                    # align language feature after first attn with the step language instruction feature
-                    assert self.self_cross_ver == 2
-                    self.step_lang_pred_layer = nn.Sequential(
-                        DenseBlock(
-                            attn_dim,
-                            lang_emb_dim,
-                            norm=None,
-                            activation=None,),
-                        DenseBlock(
-                            lang_emb_dim,
-                            lang_emb_dim,
-                            norm=None,
-                            activation=None,)
-                    )
-                    print(f'use per-step language instruction to help improve the generalization across tasks,'
-                          f' and use type {self.step_lang_type}.')
-                else:
-                    self.step_lang_type = 0
-            elif self.step_lang_type == 36:
-                if self.no_feat:
-                    # this is only used in stage one
-                    # align language feature after first attn with the step language instruction feature
-                    # and use the predicted step language instruction in first stage
-                    assert self.self_cross_ver == 2
-                    self.step_lang_pred_layer = nn.Sequential(
-                        DenseBlock(
-                            attn_dim,
-                            lang_emb_dim,
-                            norm=None,
-                            activation=None,),
-                        DenseBlock(
-                            lang_emb_dim,
-                            lang_emb_dim,
-                            norm=None,
-                            activation=None,)
-                    )
-                    self.lang_preprocess_step = DenseBlock(
-                        lang_emb_dim,
-                        self.im_channels * 2,
-                        norm="group",
-                        activation=activation,
-                    )
-                    self.fc_bef_attn_step = DenseBlock(
-                        self.input_dim_before_seq,
-                        attn_dim,
-                        norm=None,
-                        activation=None,
-                    )
-                    print(f'use per-step language instruction to help improve the generalization across tasks,'
-                          f' and use type {self.step_lang_type}.')
-                else:
-                    self.step_lang_type = 0
-            elif self.step_lang_type == 37:
-                if self.no_feat:
-                    # this is only used in stage one
-                    # align language feature after first attn with the step language instruction feature
-                    # use the ground-truth step language instruction in first stage to train
-                    # use the predicted step language instruction in first stage to eval
-                    assert self.self_cross_ver == 2
-                    self.step_lang_pred_layer = nn.Sequential(
-                        DenseBlock(
-                            attn_dim,
-                            lang_emb_dim,
-                            norm=None,
-                            activation=None,),
-                        DenseBlock(
-                            lang_emb_dim,
-                            lang_emb_dim,
-                            norm=None,
-                            activation=None,)
-                    )
-                    self.lang_preprocess_step = DenseBlock(
-                        lang_emb_dim,
-                        self.im_channels * 2,
-                        norm="group",
-                        activation=activation,
-                    )
-                    self.fc_bef_attn_step = DenseBlock(
-                        self.input_dim_before_seq,
-                        attn_dim,
-                        norm=None,
-                        activation=None,
-                    )
-                    print(f'use per-step language instruction to help improve the generalization across tasks,'
-                          f' and use type {self.step_lang_type}.')
-                else:
-                    self.step_lang_type = 0
-            elif self.step_lang_type == 38:
-                # use the ground-truth step language instruction to train
-                # use the predicted step language instruction to eval
-                if self.no_feat:
-                    # in first stage, align language feature after first attn with the step language instruction feature
-                    assert self.self_cross_ver == 2
-                    self.step_lang_pred_layer = nn.Sequential(
-                        DenseBlock(
-                            attn_dim,
-                            lang_emb_dim,
-                            norm=None,
-                            activation=None,),
-                        DenseBlock(
-                            lang_emb_dim,
-                            lang_emb_dim,
-                            norm=None,
-                            activation=None,)
-                    )
-                    self.lang_preprocess_step = DenseBlock(
-                        lang_emb_dim,
-                        self.im_channels * 2,
-                        norm="group",
-                        activation=activation,
-                    )
-                    self.fc_bef_attn_step = DenseBlock(
-                        self.input_dim_before_seq,
-                        attn_dim,
-                        norm=None,
-                        activation=None,
-                    )
-                    print(f'use per-step language instruction to help improve the generalization across tasks,'
-                          f' and use type {self.step_lang_type}.')
-            elif self.step_lang_type == 40:
-                # in first stage, the agent predict the low-level language instruction
-                # in second stage, still use the high-level language instruction to debug
-                if self.no_feat:
-                    self.step_lang_pred_layer = nn.Sequential(
-                        DenseBlock(
-                            attn_dim,
-                            lang_emb_dim,
-                            norm=None,
-                            activation=None,),
-                        DenseBlock(
-                            lang_emb_dim,
-                            lang_emb_dim,
-                            norm=None,
-                            activation=None,)
-                    )
-                print(f'use per-step language instruction to help improve the generalization across tasks,'
-                      f' and use type {self.step_lang_type}.')
-            elif self.step_lang_type == 41:
+            if self.step_lang_type == 41:
                 # in first stage, the agent predict the low-level language instruction
                 # in second stage, use the predicted instruction to train
                 if self.no_feat:
@@ -713,6 +386,28 @@ class MVT(nn.Module):
                             norm=None,
                             activation=None,)
                     )
+                print(f'use per-step language instruction to help improve the generalization across tasks,'
+                      f' and use type {self.step_lang_type}.')
+            elif self.step_lang_type == 43:
+                # in first stage, the agent predict the low-level language instruction
+                # in second stage, use the ground-truth to train and use the prediction to eval
+                if self.no_feat:
+                    self.step_lang_pred_layer = nn.Sequential(
+                        DenseBlock(
+                            attn_dim,
+                            lang_emb_dim,
+                            norm=None,
+                            activation=None,),
+                        DenseBlock(
+                            lang_emb_dim,
+                            self.im_channels*2,
+                            norm=None,
+                            activation=None,)
+                    )
+                print(f'use per-step language instruction to help improve the generalization across tasks,'
+                      f' and use type {self.step_lang_type}.')
+            elif self.step_lang_type == 44:
+                # use the low-level language instruction
                 print(f'use per-step language instruction to help improve the generalization across tasks,'
                       f' and use type {self.step_lang_type}.')
 
@@ -1064,10 +759,23 @@ class MVT(nn.Module):
         # append language features as sequence
         num_lang_tok = 0
         if self.add_lang:
-            if self.step_lang_type in {41, 42, 38} and not self.no_feat:
+            if self.step_lang_type in {41, 42} and not self.no_feat:
                 # in second stage, use the prediction to train and eval
                 l = self.lang_preprocess(
                     step_tokens_embs.clone().detach().view(bs * self.lang_max_seq_len, self.lang_emb_dim)
+                )
+            elif self.step_lang_type in {43} and not self.no_feat:
+                # in second stage, use the prediction to train and eval
+                if self.training:
+                    l = self.lang_preprocess(
+                        step_tokens_embs.clone().detach().view(bs * self.lang_max_seq_len, self.lang_emb_dim)
+                    )
+                    step_lang_target = l.clone().detach()
+                else:
+                    l = step_tokens_embs.clone().detach()
+            elif self.step_lang_type in {44}:
+                l = self.lang_preprocess(
+                    step_tokens_embs.view(bs * self.lang_max_seq_len, self.lang_emb_dim)
                 )
             else:
                 l = self.lang_preprocess(
@@ -1076,28 +784,13 @@ class MVT(nn.Module):
             l = l.view(bs, self.lang_max_seq_len, -1)
             num_lang_tok = l.shape[1]
 
-            if self.step_lang_type in {28, 29, 30, 31} and self.training:
-                l_step = self.lang_preprocess_step(
-                    step_tokens_embs.view(bs * self.lang_max_seq_len, self.lang_emb_dim)
-                )
-                l_step = l_step.view(bs, self.lang_max_seq_len, -1)
-                if self.step_lang_type in {30, 31}:
-                    ins_detach = ins.clone().detach()
-                    ins_step = torch.cat((l_step, ins_detach), dim=1)  # [B, num_img * np * np + 77, 128]
-                else:
-                    ins_step = torch.cat((l_step, ins), dim=1)  # [B, num_img * np * np + 77, 128]
-
             ins = torch.cat((l, ins), dim=1)  # [B, num_img * np * np + 77, 128]
 
         # add learnable pos encoding
         if not self.pe_fix:
             ins += self.pos_encoding
-            if self.step_lang_type in {28, 29, 30, 31} and self.training:
-                ins_step += self.pos_encoding
 
         x = self.fc_bef_attn(ins)
-        if self.step_lang_type in {28, 29, 30, 31} and self.training:
-            x_step = self.fc_bef_attn_step(ins_step)
 
         if self.self_cross_ver == 0:
             # self-attention layers
@@ -1122,96 +815,33 @@ class MVT(nn.Module):
         elif self.self_cross_ver == 2:
             assert self.pre_image_process > 0
             # cross attention
-            if self.step_lang_type in {35}:
-                if self.training:
-                    x_prediction = x.clone()
-                    for self_attn, self_ff in self.layers[:len(self.layers) // 2]:
-                        x_prediction = self_attn(x_prediction) + x_prediction
-                        x_prediction = self_ff(x_prediction) + x_prediction
-                    # (bs, lang_token, feat_dim)
-                    x_lang = x_prediction[:, :num_lang_tok]
-                    step_lang_prediction = self.step_lang_pred_layer(x_lang).reshape(bs*num_lang_tok, -1)
-                    step_lang_target = step_tokens_embs.reshape(bs*num_lang_tok, -1)
-                for self_attn, self_ff in self.layers[len(self.layers) // 2:]:
-                    x = self_attn(x) + x
-                    x = self_ff(x) + x
-            elif self.step_lang_type in {36}:
-                x_visual = x[:, num_lang_tok:].clone()
-                for self_attn, self_ff in self.layers[:len(self.layers) // 2]:
-                    x = self_attn(x) + x
-                    x = self_ff(x) + x
-                # (bs, lang_token, feat_dim)
-                x_lang = x[:, :num_lang_tok]
-                step_lang_prediction = self.step_lang_pred_layer(x_lang).reshape(bs * num_lang_tok, -1)
-                if self.training:
-                    step_lang_target = step_tokens_embs.reshape(bs*num_lang_tok, -1)
-                x_lang_new = self.lang_preprocess_step(
-                    step_lang_prediction.clone().detach().view(bs * self.lang_max_seq_len, self.lang_emb_dim)
-                )
-                x_lang_new = self.fc_bef_attn_step(x_lang_new)
-                x_lang_new = x_lang_new.view(bs, self.lang_max_seq_len, -1)
-                x = torch.cat((x_lang_new, x_visual), dim=1)
-                for self_attn, self_ff in self.layers[len(self.layers) // 2:]:
-                    x = self_attn(x) + x
-                    x = self_ff(x) + x
-            elif self.step_lang_type in {37, 38} and self.no_feat:
-                x_visual = x[:, num_lang_tok:].clone()
-                for self_attn, self_ff in self.layers[:len(self.layers) // 2]:
-                    x = self_attn(x) + x
-                    x = self_ff(x) + x
-                # (bs, lang_token, feat_dim)
-                x_lang = x[:, :num_lang_tok]
-                step_lang_prediction = self.step_lang_pred_layer(x_lang).reshape(bs * num_lang_tok, -1)
-                if self.training:
-                    step_lang_target = step_tokens_embs.reshape(bs*num_lang_tok, -1)
-                    x_lang_new = self.lang_preprocess_step(
-                        step_tokens_embs.clone().detach().view(bs * self.lang_max_seq_len, self.lang_emb_dim)
-                    )
-                else:
-                    x_lang_new = self.lang_preprocess_step(
-                        step_lang_prediction.clone().detach().view(bs * self.lang_max_seq_len, self.lang_emb_dim)
-                    )
-                x_lang_new = self.fc_bef_attn_step(x_lang_new)
-                x_lang_new = x_lang_new.view(bs, self.lang_max_seq_len, -1)
-                x = torch.cat((x_lang_new, x_visual), dim=1)
-                for self_attn, self_ff in self.layers[len(self.layers) // 2:]:
-                    x = self_attn(x) + x
-                    x = self_ff(x) + x
-            else:
-                for self_attn, self_ff in self.layers[len(self.layers) // 2:]:
-                    x = self_attn(x) + x
-                    x = self_ff(x) + x
-                if self.step_lang_type in {28, 29, 30, 31} and self.training:
-                    for self_attn, self_ff in self.layers[:len(self.layers) // 2]:
-                        x_step = self_attn(x_step) + x_step
-                        x_step = self_ff(x_step) + x_step
+            for self_attn, self_ff in self.layers[len(self.layers) // 2:]:
+                x = self_attn(x) + x
+                x = self_ff(x) + x
         else:
             assert False
 
-        if self.step_lang_type in {40, 41, 42} and self.no_feat:
+        if self.step_lang_type in {41, 42} and self.no_feat:
             # in first stage, predict the low-level language instruction
             x_lang = x[:, :num_lang_tok]
             step_lang_prediction = self.step_lang_pred_layer(x_lang.reshape(bs*num_lang_tok, -1))
             if self.training:
                 step_lang_target = step_tokens_embs.view(bs * self.lang_max_seq_len, self.lang_emb_dim)
+        if self.step_lang_type in {43} and self.no_feat:
+            # in first stage, predict the low-level language instruction
+            x_lang = x[:, :num_lang_tok]
+            step_lang_prediction = self.step_lang_pred_layer(x_lang.reshape(bs*num_lang_tok, -1))
 
         # append language features as sequence
         if self.add_lang:
             # throwing away the language embeddings
             x = x[:, num_lang_tok:]
-            if self.step_lang_type in {28, 29, 30, 31} and self.training:
-                x_step = x_step[:, num_lang_tok:]
 
         x = self.fc_aft_attn(x)
-        if self.step_lang_type in {28, 29, 30, 31} and self.training:
-            x_step = self.fc_aft_attn_step(x_step)
 
         # reshape back to original size
         x = x.view(bs, *ins_orig_shape[1:-1], x.shape[-1])  # [B, num_img, np, np, 128]
         x = rearrange(x, "b ... d -> b d ...")  # [B, 128, num_img, np, np]
-        if self.step_lang_type in {28, 29, 30, 31} and self.training:
-            x_step = x_step.view(bs, *ins_orig_shape[1:-1], x_step.shape[-1])  # [B, num_img, np, np, 128]
-            x_step = rearrange(x_step, "b ... d -> b d ...")  # [B, 128, num_img, np, np]
 
         feat = []
         _feat = torch.max(torch.max(x, dim=-1)[0], dim=-1)[0]
@@ -1225,14 +855,6 @@ class MVT(nn.Module):
                 bs * self.num_img, self.input_dim_before_seq, num_pat_img, num_pat_img
             )
         )
-        if self.step_lang_type in {28, 29, 30, 31} and self.training:
-            x_step = (
-                x_step.transpose(1, 2)
-                .clone()
-                .view(
-                    bs * self.num_img, self.input_dim_before_seq, num_pat_img, num_pat_img
-                )
-            )
 
         if self.cvx_up:
             trans = self.up0(x)
@@ -1245,38 +867,6 @@ class MVT(nn.Module):
 
             # translation decoder
             trans = self.trans_decoder(u).view(bs, self.num_img, h, w)
-
-        if self.training and self.step_lang_type in {28, 30}:
-            # projection
-            # (bs, 1, num_img, 2)
-            wpt_img = self.get_pt_loc_on_img(
-                wpt_local.unsqueeze(1),
-                dyn_cam_info=None,
-            )
-            wpt_img = wpt_img.reshape(bs * self.num_img, 2)
-
-            # add noise to wpt image while training
-            wpt_img = mvt_utils.add_uni_noi(
-                wpt_img, self.wpt_img_aug * self.img_size
-            )
-            wpt_img = torch.clamp(wpt_img, 0, self.img_size - 1)
-
-            _wpt_img = wpt_img / self.img_patch_size
-            _u = x
-            assert (
-                    0 <= _wpt_img.min() and _wpt_img.max() <= x.shape[-1]
-            ), print(_wpt_img, x.shape)
-
-            _wpt_img = _wpt_img.unsqueeze(1)
-
-            # prediction
-            _feat = select_feat_from_hm(_wpt_img, _u)[0]
-            _feat = _feat.view(bs, -1)
-            step_lang_prediction = self.step_lang_pred_layer(_feat)
-            # target
-            _feat_step = select_feat_from_hm(_wpt_img, x_step)[0]
-            _feat_step = _feat_step.view(bs, -1)
-            step_lang_target = self.step_lang_target_layer(_feat_step)
 
         if not self.no_feat:
             if self.feat_ver == 0:
@@ -1350,15 +940,6 @@ class MVT(nn.Module):
 
             else:
                 assert False, NotImplementedError
-
-            if self.training and self.step_lang_type in {16, 29, 31}:
-                step_lang_prediction = self.step_lang_pred_layer(_feat)
-                if self.step_lang_type in {16}:
-                    step_lang_target = self.step_lang_target_layer(step_single_embs)
-                elif self.step_lang_type in {29, 31}:
-                    _feat_step = select_feat_from_hm(_wpt_img, x_step)[0]
-                    _feat_step = _feat_step.view(bs, -1)
-                    step_lang_target = self.step_lang_target_layer(_feat_step)
 
             feat.append(_feat)
 
