@@ -49,6 +49,7 @@ _C.img_aug_2 = 0.0
 _C.pre_image_process = 0
 _C.pre_heat_map = False
 _C.step_lang_type = 0
+_C.add_obj = 0
 
 
 def get_cfg_defaults():

@@ -1,17 +1,26 @@
 import os
 from typing import Tuple, List
 from groundingdino.util.inference import load_model, load_image, predict, annotate, preprocess_caption
-# import groundingdino.datasets.transforms as T
 import torchvision.transforms as T
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 from PIL import Image
-import clip
-from einops import rearrange, repeat
-import random
-import trimesh
+from einops import rearrange
 import open3d as o3d
+
+from groundingdino.models.GroundingDINO.bertwarper import (
+    generate_masks_with_special_tokens_and_transfer_map,
+)
+
+from groundingdino.util.misc import (
+    NestedTensor,
+    nested_tensor_from_tensor_list,
+)
+from groundingdino.models.GroundingDINO.utils import (
+    gen_encoder_output_proposals,
+)
 
 
 class GroundingDinoHeatMap(nn.Module):
@@ -335,4 +344,449 @@ class GroundingDinoHeatMap(nn.Module):
     #             pc_new.append(pc[i])
     #             img_feat_new.append(img_feat[i])
     #     return pc_new, img_feat_new
+
+
+class GroundingDinoFeature(nn.Module):
+    def __init__(self, num_queries=100, K=5):
+        super().__init__()
+        self.root_path = '../../GroundingDINO/'
+        self.model = load_model(self.root_path+"groundingdino/config/GroundingDINO_SwinT_OGC.py",
+                                self.root_path+"weights/groundingdino_swint_ogc.pth")
+        self.device = 'cuda'
+        self.model.to(self.device)
+        self.model.eval()
+        for param in self.model.parameters():
+            param.requires_grad = False
+
+        self.resize_size = 224
+        self.resize = T.Resize((self.resize_size, self.resize_size))
+
+        # the original query num in grounding dino is 900. To reduce the computational cost, we reduce it to 100.
+        self.num_queries = num_queries
+        self.model.transformer.num_queries = self.num_queries
+
+        self.K = K
+
+    @torch.no_grad()
+    def forward(self, images, text_prompts):
+        # images (B, num_views, 3, h, w), text_prompts (B, 1)
+        b, nv, _, h, w = images.shape
+        assert h == w
+        samples = self.resize(images.reshape(b*nv, 3, h, w))
+        captions = text_prompts.repeat(nv, axis=1).reshape(b*nv)
+
+        captions = list(map(preprocess_caption, captions.tolist()))
+
+        # forward the encoder, this part comes from
+        # https://github.com/IDEA-Research/GroundingDINO/blob/856dde20aee659246248e20734ef9ba5214f5e44/groundingdino/models/GroundingDINO/groundingdino.py
+
+        # captions = [t["caption"] for t in targets]
+        # encoder texts
+        tokenized = self.model.tokenizer(captions, padding="longest", return_tensors="pt").to(
+            samples.device
+        )
+        (
+            text_self_attention_masks,
+            position_ids,
+            cate_to_token_mask_list,
+        ) = generate_masks_with_special_tokens_and_transfer_map(
+            tokenized, self.model.specical_tokens, self.model.tokenizer
+        )
+
+        if text_self_attention_masks.shape[1] > self.model.max_text_len:
+            text_self_attention_masks = text_self_attention_masks[
+                :, : self.model.max_text_len, : self.model.max_text_len
+            ]
+            position_ids = position_ids[:, : self.model.max_text_len]
+            tokenized["input_ids"] = tokenized["input_ids"][:, : self.model.max_text_len]
+            tokenized["attention_mask"] = tokenized["attention_mask"][:, : self.model.max_text_len]
+            tokenized["token_type_ids"] = tokenized["token_type_ids"][:, : self.model.max_text_len]
+
+        # extract text embeddings
+        if self.model.sub_sentence_present:
+            tokenized_for_encoder = {k: v for k, v in tokenized.items() if k != "attention_mask"}
+            tokenized_for_encoder["attention_mask"] = text_self_attention_masks
+            tokenized_for_encoder["position_ids"] = position_ids
+        else:
+            # import ipdb; ipdb.set_trace()
+            tokenized_for_encoder = tokenized
+
+        bert_output = self.model.bert(**tokenized_for_encoder)  # bs, 195, 768
+
+        encoded_text = self.model.feat_map(bert_output["last_hidden_state"])  # bs, 195, d_model
+        text_token_mask = tokenized.attention_mask.bool()  # bs, 195
+        # text_token_mask: True for nomask, False for mask
+        # text_self_attention_masks: True for nomask, False for mask
+
+        if encoded_text.shape[1] > self.model.max_text_len:
+            encoded_text = encoded_text[:, : self.model.max_text_len, :]
+            text_token_mask = text_token_mask[:, : self.model.max_text_len]
+            position_ids = position_ids[:, : self.model.max_text_len]
+            text_self_attention_masks = text_self_attention_masks[
+                :, : self.model.max_text_len, : self.model.max_text_len
+            ]
+
+        text_dict = {
+            "encoded_text": encoded_text,  # bs, 195, d_model
+            "text_token_mask": text_token_mask,  # bs, 195
+            "position_ids": position_ids,  # bs, 195
+            "text_self_attention_masks": text_self_attention_masks,  # bs, 195,195
+        }
+
+        # import ipdb; ipdb.set_trace()
+        if isinstance(samples, (list, torch.Tensor)):
+            samples = nested_tensor_from_tensor_list(samples)
+        if not hasattr(self.model, 'features') or not hasattr(self.model, 'poss'):
+            self.model.set_image_tensor(samples)
+
+        srcs = []
+        masks = []
+        for l, feat in enumerate(self.model.features):
+            src, mask = feat.decompose()
+            srcs.append(self.model.input_proj[l](src))
+            masks.append(mask)
+            assert mask is not None
+        if self.model.num_feature_levels > len(srcs):
+            _len_srcs = len(srcs)
+            for l in range(_len_srcs, self.model.num_feature_levels):
+                if l == _len_srcs:
+                    src = self.model.input_proj[l](self.model.features[-1].tensors)
+                else:
+                    src = self.model.input_proj[l](srcs[-1])
+                m = samples.mask
+                mask = F.interpolate(m[None].float(), size=src.shape[-2:]).to(torch.bool)[0]
+                pos_l = self.model.backbone[1](NestedTensor(src, mask)).to(src.dtype)
+                srcs.append(src)
+                masks.append(mask)
+                self.model.poss.append(pos_l)
+
+        input_query_bbox = input_query_label = attn_mask = dn_meta = None
+        # hs, reference, hs_enc, ref_enc, init_box_proposal = self.transformer(
+        #     srcs, masks, input_query_bbox, self.poss, input_query_label, attn_mask, text_dict
+        # )
+
+        # forward the transformer, this part comes from
+        # https://github.com/IDEA-Research/GroundingDINO/blob/856dde20aee659246248e20734ef9ba5214f5e44/groundingdino/models/GroundingDINO/transformer.py
+
+        # prepare input for encoder
+        src_flatten = []
+        mask_flatten = []
+        lvl_pos_embed_flatten = []
+        spatial_shapes = []
+        for lvl, (src, mask, pos_embed) in enumerate(zip(srcs, masks, self.model.poss)):
+            bs, c, h, w = src.shape
+            spatial_shape = (h, w)
+            spatial_shapes.append(spatial_shape)
+
+            src = src.flatten(2).transpose(1, 2)  # bs, hw, c
+            mask = mask.flatten(1)  # bs, hw
+            pos_embed = pos_embed.flatten(2).transpose(1, 2)  # bs, hw, c
+            if self.model.transformer.num_feature_levels > 1 and self.model.transformer.level_embed is not None:
+                lvl_pos_embed = pos_embed + self.model.transformer.level_embed[lvl].view(1, 1, -1)
+            else:
+                lvl_pos_embed = pos_embed
+            lvl_pos_embed_flatten.append(lvl_pos_embed)
+            src_flatten.append(src)
+            mask_flatten.append(mask)
+        src_flatten = torch.cat(src_flatten, 1)  # bs, \sum{hxw}, c
+        mask_flatten = torch.cat(mask_flatten, 1)  # bs, \sum{hxw}
+        lvl_pos_embed_flatten = torch.cat(lvl_pos_embed_flatten, 1)  # bs, \sum{hxw}, c
+        spatial_shapes = torch.as_tensor(
+            spatial_shapes, dtype=torch.long, device=src_flatten.device
+        )
+        level_start_index = torch.cat(
+            (spatial_shapes.new_zeros((1,)), spatial_shapes.prod(1).cumsum(0)[:-1])
+        )
+        valid_ratios = torch.stack([self.model.transformer.get_valid_ratio(m) for m in masks], 1)
+
+        # two stage
+        enc_topk_proposals = enc_refpoint_embed = None
+
+        #########################################################
+        # Begin Encoder
+        #########################################################
+        memory, memory_text = self.model.transformer.encoder(
+            src_flatten,
+            pos=lvl_pos_embed_flatten,
+            level_start_index=level_start_index,
+            spatial_shapes=spatial_shapes,
+            valid_ratios=valid_ratios,
+            key_padding_mask=mask_flatten,
+            memory_text=text_dict["encoded_text"],
+            text_attention_mask=~text_dict["text_token_mask"],
+            # we ~ the mask . False means use the token; True means pad the token
+            position_ids=text_dict["position_ids"],
+            text_self_attention_masks=text_dict["text_self_attention_masks"],
+        )
+        self.model.unset_image_tensor()
+        return memory
+
+    @torch.no_grad()
+    def forward_query(self, images, text_prompts):
+        # images (B, num_views, 3, h, w), text_prompts (B, 1)
+        b, nv, _, h, w = images.shape
+        assert h == w
+        samples = self.resize(images.reshape(b*nv, 3, h, w))
+        captions = text_prompts.repeat(nv, axis=1).reshape(b*nv)
+
+        captions = list(map(preprocess_caption, captions.tolist()))
+
+        # forward the encoder, this part comes from
+        # https://github.com/IDEA-Research/GroundingDINO/blob/856dde20aee659246248e20734ef9ba5214f5e44/groundingdino/models/GroundingDINO/groundingdino.py
+
+        # captions = [t["caption"] for t in targets]
+        # encoder texts
+        tokenized = self.model.tokenizer(captions, padding="longest", return_tensors="pt").to(
+            samples.device
+        )
+        (
+            text_self_attention_masks,
+            position_ids,
+            cate_to_token_mask_list,
+        ) = generate_masks_with_special_tokens_and_transfer_map(
+            tokenized, self.model.specical_tokens, self.model.tokenizer
+        )
+
+        if text_self_attention_masks.shape[1] > self.model.max_text_len:
+            text_self_attention_masks = text_self_attention_masks[
+                :, : self.model.max_text_len, : self.model.max_text_len
+            ]
+            position_ids = position_ids[:, : self.model.max_text_len]
+            tokenized["input_ids"] = tokenized["input_ids"][:, : self.model.max_text_len]
+            tokenized["attention_mask"] = tokenized["attention_mask"][:, : self.model.max_text_len]
+            tokenized["token_type_ids"] = tokenized["token_type_ids"][:, : self.model.max_text_len]
+
+        # extract text embeddings
+        if self.model.sub_sentence_present:
+            tokenized_for_encoder = {k: v for k, v in tokenized.items() if k != "attention_mask"}
+            tokenized_for_encoder["attention_mask"] = text_self_attention_masks
+            tokenized_for_encoder["position_ids"] = position_ids
+        else:
+            # import ipdb; ipdb.set_trace()
+            tokenized_for_encoder = tokenized
+
+        bert_output = self.model.bert(**tokenized_for_encoder)  # bs, 195, 768
+
+        encoded_text = self.model.feat_map(bert_output["last_hidden_state"])  # bs, 195, d_model
+        text_token_mask = tokenized.attention_mask.bool()  # bs, 195
+        # text_token_mask: True for nomask, False for mask
+        # text_self_attention_masks: True for nomask, False for mask
+
+        if encoded_text.shape[1] > self.model.max_text_len:
+            encoded_text = encoded_text[:, : self.model.max_text_len, :]
+            text_token_mask = text_token_mask[:, : self.model.max_text_len]
+            position_ids = position_ids[:, : self.model.max_text_len]
+            text_self_attention_masks = text_self_attention_masks[
+                :, : self.model.max_text_len, : self.model.max_text_len
+            ]
+
+        text_dict = {
+            "encoded_text": encoded_text,  # bs, 195, d_model
+            "text_token_mask": text_token_mask,  # bs, 195
+            "position_ids": position_ids,  # bs, 195
+            "text_self_attention_masks": text_self_attention_masks,  # bs, 195,195
+        }
+
+        # import ipdb; ipdb.set_trace()
+        if isinstance(samples, (list, torch.Tensor)):
+            samples = nested_tensor_from_tensor_list(samples)
+        if not hasattr(self.model, 'features') or not hasattr(self.model, 'poss'):
+            self.model.set_image_tensor(samples)
+
+        srcs = []
+        masks = []
+        for l, feat in enumerate(self.model.features):
+            src, mask = feat.decompose()
+            srcs.append(self.model.input_proj[l](src))
+            masks.append(mask)
+            assert mask is not None
+        if self.model.num_feature_levels > len(srcs):
+            _len_srcs = len(srcs)
+            for l in range(_len_srcs, self.model.num_feature_levels):
+                if l == _len_srcs:
+                    src = self.model.input_proj[l](self.model.features[-1].tensors)
+                else:
+                    src = self.model.input_proj[l](srcs[-1])
+                m = samples.mask
+                mask = F.interpolate(m[None].float(), size=src.shape[-2:]).to(torch.bool)[0]
+                pos_l = self.model.backbone[1](NestedTensor(src, mask)).to(src.dtype)
+                srcs.append(src)
+                masks.append(mask)
+                self.model.poss.append(pos_l)
+
+        input_query_bbox = input_query_label = attn_mask = dn_meta = None
+        # hs, reference, hs_enc, ref_enc, init_box_proposal = self.transformer(
+        #     srcs, masks, input_query_bbox, self.poss, input_query_label, attn_mask, text_dict
+        # )
+
+        # forward the transformer, this part comes from
+        # https://github.com/IDEA-Research/GroundingDINO/blob/856dde20aee659246248e20734ef9ba5214f5e44/groundingdino/models/GroundingDINO/transformer.py
+
+        # prepare input for encoder
+        src_flatten = []
+        mask_flatten = []
+        lvl_pos_embed_flatten = []
+        spatial_shapes = []
+        for lvl, (src, mask, pos_embed) in enumerate(zip(srcs, masks, self.model.poss)):
+            bs, c, h, w = src.shape
+            spatial_shape = (h, w)
+            spatial_shapes.append(spatial_shape)
+
+            src = src.flatten(2).transpose(1, 2)  # bs, hw, c
+            mask = mask.flatten(1)  # bs, hw
+            pos_embed = pos_embed.flatten(2).transpose(1, 2)  # bs, hw, c
+            if self.model.transformer.num_feature_levels > 1 and self.model.transformer.level_embed is not None:
+                lvl_pos_embed = pos_embed + self.model.transformer.level_embed[lvl].view(1, 1, -1)
+            else:
+                lvl_pos_embed = pos_embed
+            lvl_pos_embed_flatten.append(lvl_pos_embed)
+            src_flatten.append(src)
+            mask_flatten.append(mask)
+        src_flatten = torch.cat(src_flatten, 1)  # bs, \sum{hxw}, c
+        mask_flatten = torch.cat(mask_flatten, 1)  # bs, \sum{hxw}
+        lvl_pos_embed_flatten = torch.cat(lvl_pos_embed_flatten, 1)  # bs, \sum{hxw}, c
+        spatial_shapes = torch.as_tensor(
+            spatial_shapes, dtype=torch.long, device=src_flatten.device
+        )
+        level_start_index = torch.cat(
+            (spatial_shapes.new_zeros((1,)), spatial_shapes.prod(1).cumsum(0)[:-1])
+        )
+        valid_ratios = torch.stack([self.model.transformer.get_valid_ratio(m) for m in masks], 1)
+
+        # two stage
+        enc_topk_proposals = enc_refpoint_embed = None
+
+        #########################################################
+        # Begin Encoder
+        #########################################################
+        memory, memory_text = self.model.transformer.encoder(
+            src_flatten,
+            pos=lvl_pos_embed_flatten,
+            level_start_index=level_start_index,
+            spatial_shapes=spatial_shapes,
+            valid_ratios=valid_ratios,
+            key_padding_mask=mask_flatten,
+            memory_text=text_dict["encoded_text"],
+            text_attention_mask=~text_dict["text_token_mask"],
+            # we ~ the mask . False means use the token; True means pad the token
+            position_ids=text_dict["position_ids"],
+            text_self_attention_masks=text_dict["text_self_attention_masks"],
+        )
+        #########################################################
+        # End Encoder
+        # - memory: bs, \sum{hw}, c
+        # - mask_flatten: bs, \sum{hw}
+        # - lvl_pos_embed_flatten: bs, \sum{hw}, c
+        # - enc_intermediate_output: None or (nenc+1, bs, nq, c) or (nenc, bs, nq, c)
+        # - enc_intermediate_refpoints: None or (nenc+1, bs, nq, c) or (nenc, bs, nq, c)
+        #########################################################
+        text_dict["encoded_text"] = memory_text
+        # if os.environ.get("SHILONG_AMP_INFNAN_DEBUG") == '1':
+        #     if memory.isnan().any() | memory.isinf().any():
+        #         import ipdb; ipdb.set_trace()
+
+        if self.model.transformer.two_stage_type == "standard":
+            output_memory, output_proposals = gen_encoder_output_proposals(
+                memory, mask_flatten, spatial_shapes
+            )
+            output_memory = self.model.transformer.enc_output_norm(self.model.transformer.enc_output(output_memory))
+
+            if text_dict is not None:
+                enc_outputs_class_unselected = self.model.transformer.enc_out_class_embed(output_memory, text_dict)
+            else:
+                enc_outputs_class_unselected = self.model.transformer.enc_out_class_embed(output_memory)
+
+            topk_logits = enc_outputs_class_unselected.max(-1)[0]
+            enc_outputs_coord_unselected = (
+                self.model.transformer.enc_out_bbox_embed(output_memory) + output_proposals
+            )  # (bs, \sum{hw}, 4) unsigmoid
+            topk = self.model.transformer.num_queries
+
+            topk_proposals = torch.topk(topk_logits, topk, dim=1)[1]  # bs, nq
+
+            # gather boxes
+            refpoint_embed_undetach = torch.gather(
+                enc_outputs_coord_unselected, 1, topk_proposals.unsqueeze(-1).repeat(1, 1, 4)
+            )  # unsigmoid
+            refpoint_embed_ = refpoint_embed_undetach.detach()
+
+            # gather tgt
+            tgt_undetach = torch.gather(
+                output_memory, 1, topk_proposals.unsqueeze(-1).repeat(1, 1, self.model.transformer.d_model)
+            )
+            tgt_ = tgt_undetach.detach()
+        else:
+            raise NotImplementedError("unknown two_stage_type {}".format(self.two_stage_type))
+        #########################################################
+        # End preparing tgt
+        # - tgt: bs, NQ, d_model
+        # - refpoint_embed(unsigmoid): bs, NQ, 4
+        #########################################################
+        self.model.unset_image_tensor()
+        return tgt_, refpoint_embed_
+
+    @torch.no_grad()
+    def batch_predict(self, image: torch.Tensor, captions: List, h: int, w: int):
+        captions = list(map(preprocess_caption, captions))
+
+        outputs = self.model(image, captions=captions)
+
+        prediction_logits = outputs["pred_logits"].sigmoid()  # (bs, nq, 256)
+        max_logits = prediction_logits.max(dim=-1)[0]  # (bs, nq)
+        prediction_boxes = outputs["pred_boxes"]  # (bs, nq, 4)
+
+        # filter the logits: the bounding box may include the whole image sometimes, filter them.
+        # filter the logits: the height or width of the bounding box may be 1, filter them.
+        box_size = prediction_boxes[:, :, 2] * prediction_boxes[:, :, 3]  # (bs, nq)
+        filter = box_size > 0.81
+        max_logits[filter] = 0.0
+
+        filter = (prediction_boxes[:, :, 2] * w).to(torch.int) <= 1
+        max_logits[filter] = 0.0
+
+        filter = (prediction_boxes[:, :, 3] * h).to(torch.int) <= 1
+        max_logits[filter] = 0.0
+
+        # top-k
+        bs = prediction_boxes.size(0)
+        top_ind = torch.topk(max_logits, self.K, dim=-1).indices  # (bs, K)
+        top_box = prediction_boxes[torch.arange(bs).reshape(bs, 1), top_ind]  # (bs, K, 4)
+
+        return top_box
+
+    @torch.no_grad()
+    def forward_box_feature(self, images, text_prompts):
+        # get the box feature
+        # images (B, num_views, 3, h, w), text_prompts (B, 1)
+        b, nv, _, h, w = images.shape
+        assert h == w
+        rgb_views_images = self.resize(images.reshape(b*nv, 3, h, w))
+        text_prompts = text_prompts.repeat(nv, axis=1).reshape(b*nv)
+        boxes = (self.batch_predict(rgb_views_images, text_prompts.tolist(), h, w))  # (b*nv, K, 4)
+
+        all_roi = []
+        for i in range(b*nv):
+            box = (boxes[i].cpu() * torch.tensor([w, h, w, h])).numpy()
+
+            roi = []
+            for maskidx in range(self.K):
+                _cx, _cy, _w, _h = tuple(box[maskidx])  # cxcywh bounding box
+                _x, _y, _x2, _y2 = map(int, (_cx - _w / 2, _cy - _h / 2, _cx + _w / 2, _cy + _h / 2))
+                _x, _y, _x2, _y2 = tuple(np.clip(np.array([_x, _y, _x2, _y2]), a_min=0, a_max=w - 1))
+                img_roi = rgb_views_images[i][:, _y: _y2, _x: _x2]
+                # pad to avoid hurting the original weight/height ratio of the object
+                if _w > _h:
+                    pad = [0, 0, int((_w-_h)/2), int((_w-_h)/2)]
+                else:
+                    pad = [int((_h-_w)/2), int((_h-_w)/2), 0, 0]
+                img_roi = self.resize(F.pad(img_roi, pad, "constant", 0))
+                roi.append(img_roi)
+            # [K, 3, h, w]
+            roi = torch.stack(roi)
+            all_roi.append(roi)
+        # [b*nv, K, 3, h, w]
+        all_roi = torch.stack(all_roi)
+        # (b*nv*K, 3, h, w)
+        all_roi = rearrange(all_roi, "b K ... -> (b K) ...")
+        return all_roi, boxes
 

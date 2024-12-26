@@ -27,7 +27,7 @@ from rvt.mvt.attn import (
     FixedPositionalEncoding,
 )
 from rvt.mvt.raft_utils import ConvexUpSample
-from rvt.mvt.groundingdino_wrapper import GroundingDinoHeatMap
+from rvt.mvt.groundingdino_wrapper import GroundingDinoHeatMap, GroundingDinoFeature
 from rvt.utils.dataset import _clip_encode_text
 
 
@@ -71,6 +71,7 @@ class MVT(nn.Module):
         num_rot,
         pre_image_process,
         step_lang_type,
+        add_obj,
         renderer_device="cuda:0",
         renderer=None,
         no_feat=False,
@@ -135,6 +136,7 @@ class MVT(nn.Module):
             from different views
         :param step_lang_type: label the action per step with a specific language instruction and align the action with
             this language instruction for generalization across different tasks
+        :param add_obj: add object-centric feature for better localizing the language-aligned objects in the scene
         """
 
         super().__init__()
@@ -168,6 +170,7 @@ class MVT(nn.Module):
         self.no_feat = no_feat
         self.pre_image_process = pre_image_process
         self.step_lang_type = step_lang_type
+        self.add_object = add_obj
 
         if self.cvx_up:
             assert not self.inp_pre_con, (
@@ -248,22 +251,32 @@ class MVT(nn.Module):
             inp_pre_out_dim = inp_img_feat_dim
 
         if self.pre_image_process > 0:
-            # load pretrained dinov2
-            # self.pretrained_image_encoder = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14_reg')
-            self.pretrained_image_encoder = torch.hub.load('../../pvr_ckpts/facebookresearch_dinov2_main',
-                                                           model='dinov2_vitb14_reg', source='local')
+            if self.pre_image_process == 9:
+                if self.no_feat:
+                    # in first stage, use grounding-dino feature
+                    self.pre_image_process = 9
+                else:
+                    # in second stage, use clip and dino
+                    self.pre_image_process = 8
+            print('------------')
             print(f'use pretrained image encoder to preprocess the rgb images'
                   f' and use type {self.pre_image_process}.')
-            self.pretrained_image_encoder.to('cuda')
-            self.pretrained_image_encoder.eval()
-            for param in self.pretrained_image_encoder.parameters():
-                param.requires_grad = False
-            # get emb dim
-            with torch.no_grad():
-                random_img = torch.randn(1, 3, 224, 224).to('cuda')
-                output = self.pretrained_image_encoder.forward_features(random_img)
-                feature = output['x_norm_patchtokens']
-                img_emb_dim = feature.size(2)
+            print('------------')
+            if self.pre_image_process != 9:
+                # load pretrained dinov2
+                # self.pretrained_image_encoder = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14_reg')
+                self.pretrained_image_encoder = torch.hub.load('../../pvr_ckpts/facebookresearch_dinov2_main',
+                                                               model='dinov2_vitb14_reg', source='local')
+                self.pretrained_image_encoder.to('cuda')
+                self.pretrained_image_encoder.eval()
+                for param in self.pretrained_image_encoder.parameters():
+                    param.requires_grad = False
+                # get emb dim
+                with torch.no_grad():
+                    random_img = torch.randn(1, 3, 224, 224).to('cuda')
+                    output = self.pretrained_image_encoder.forward_features(random_img)
+                    feature = output['x_norm_patchtokens']
+                    img_emb_dim = feature.size(2)
 
             if self.pre_image_process == 6:
                 self.img_compress_fc = DenseBlock(
@@ -340,6 +353,50 @@ class MVT(nn.Module):
                     activation=activation,
                     padding=0,
                 )
+            elif self.pre_image_process == 9:
+                assert self.cvx_up
+                self.groundingdino_feature_extractor = GroundingDinoFeature()
+                self.groundingdino_preprocess = DenseBlock(
+                    256,
+                    self.im_channels,
+                    norm="layer",
+                    activation=activation,
+                )
+                inp_pre_out_dim -= 4
+                self.num_level = 4
+                self.patch_size = np.array([8, 16, 32, 56])
+                self.num_patch_per_level = (img_size/self.patch_size).astype('int32')
+                self.patchify_layers = nn.ModuleList()
+                for num_l in range(self.num_level):
+                    self.patchify_layers.append(Conv2DBlock(
+                        inp_pre_out_dim,
+                        self.im_channels,
+                        kernel_sizes=self.patch_size[num_l],
+                        strides=self.patch_size[num_l],
+                        norm="group",
+                        activation=activation,
+                        padding=0,
+                    ))
+
+                if self.pe_fix:
+                    num_pe_token = 1045 * self.num_img
+                else:
+                    num_pe_token = lang_max_seq_len + 1045 * self.num_img
+                self.pos_encoding = nn.Parameter(
+                    torch.randn(
+                        1,
+                        num_pe_token,
+                        self.input_dim_before_seq,
+                    )
+                )
+
+                self.ups = nn.ModuleList()
+                for num_l in range(self.num_level):
+                    self.ups.append(ConvexUpSample(
+                        in_dim=self.input_dim_before_seq,
+                        out_dim=1,
+                        up_ratio=self.patch_size[num_l],
+                    ))
         else:
             self.patchify = Conv2DBlock(
                 inp_pre_out_dim,
@@ -350,6 +407,141 @@ class MVT(nn.Module):
                 activation=activation,
                 padding=0,
             )
+
+        if self.add_object > 0:
+            assert self.self_cross_ver == 2
+            if self.add_object == 1:
+                if self.no_feat:
+                    # this is only used in stage one
+                    # simply append the feature from groundingdino
+                    self.groundingdino_feature_extractor = GroundingDinoFeature()
+                    self.groundingdino_preprocess = DenseBlock(
+                        256,
+                        self.im_channels * 2,
+                        norm='layer',
+                        activation=activation,
+                    )
+                    print('------------')
+                    print(f'use object-centric feature to help improve the ability of'
+                          f' localizing the task-related objects in the scene,'
+                          f' and use type {self.add_object}.')
+                    print('------------')
+                else:
+                    self.add_object = 0
+            elif self.add_object == 2:
+                if self.no_feat:
+                    # this is only used in stage one
+                    # attention the feature from groundingdino with image feature first
+                    self.groundingdino_feature_extractor = GroundingDinoFeature()
+                    self.groundingdino_preprocess = DenseBlock(
+                        256,
+                        self.im_channels * 2,
+                        norm='layer',
+                        activation=activation,
+                    )
+                    print('------------')
+                    print(f'use object-centric feature to help improve the ability of'
+                          f' localizing the task-related objects in the scene,'
+                          f' and use type {self.add_object}.')
+                    print('------------')
+                else:
+                    self.add_object = 0
+            elif self.add_object == 3:
+                if self.no_feat:
+                    # this is only used in stage one
+                    # append the query from groundingdino
+                    self.groundingdino_feature_extractor = GroundingDinoFeature()
+                    self.groundingdino_preprocess = DenseBlock(
+                        256,
+                        self.im_channels * 2,
+                        norm='layer',
+                        activation=activation,
+                    )
+                    self.groundingdino_query_pos_emb = DenseBlock(
+                        4,
+                        self.im_channels * 2,
+                        norm='layer',
+                        activation=activation,
+                    )
+                    print('------------')
+                    print(f'use object-centric feature to help improve the ability of'
+                          f' localizing the task-related objects in the scene,'
+                          f' and use type {self.add_object}.')
+                    print('------------')
+                else:
+                    self.add_object = 0
+            elif self.add_object == 4:
+                if self.no_feat:
+                    # this is only used in stage one
+                    # attend the query from groundingdino with image feature first
+                    self.groundingdino_feature_extractor = GroundingDinoFeature()
+                    self.groundingdino_preprocess = DenseBlock(
+                        256,
+                        self.im_channels * 2,
+                        norm='layer',
+                        activation=activation,
+                    )
+                    self.groundingdino_query_pos_emb = DenseBlock(
+                        4,
+                        self.im_channels * 2,
+                        norm='layer',
+                        activation=activation,
+                    )
+                    print('------------')
+                    print(f'use object-centric feature to help improve the ability of'
+                          f' localizing the task-related objects in the scene,'
+                          f' and use type {self.add_object}.')
+                    print('------------')
+                else:
+                    self.add_object = 0
+            elif self.add_object == 5:
+                if self.no_feat:
+                    # this is only used in stage one
+                    # append the box feature from clip
+                    self.groundingdino_feature_extractor = GroundingDinoFeature(num_queries=900, K=5)
+                    self.box_feat_preprocess = DenseBlock(
+                        768,
+                        self.im_channels * 2,
+                        norm='layer',
+                        activation=activation,
+                    )
+                    self.box_pos_emb = DenseBlock(
+                        4,
+                        self.im_channels * 2,
+                        norm='layer',
+                        activation=activation,
+                    )
+                    print('------------')
+                    print(f'use object-centric feature to help improve the ability of'
+                          f' localizing the task-related objects in the scene,'
+                          f' and use type {self.add_object}.')
+                    print('------------')
+                else:
+                    self.add_object = 0
+            elif self.add_object == 6:
+                if self.no_feat:
+                    # this is only used in stage one
+                    # attend the box feature with image feature first
+                    self.groundingdino_feature_extractor = GroundingDinoFeature(num_queries=900, K=5)
+                    self.box_feat_preprocess = DenseBlock(
+                        768,
+                        self.im_channels * 2,
+                        norm='layer',
+                        activation=activation,
+                    )
+                    self.box_pos_emb = DenseBlock(
+                        4,
+                        self.im_channels * 2,
+                        norm='layer',
+                        activation=activation,
+                    )
+                    print('------------')
+                    print(f'use object-centric feature to help improve the ability of'
+                          f' localizing the task-related objects in the scene,'
+                          f' and use type {self.add_object}.')
+                    print('------------')
+                else:
+                    self.add_object = 0
 
         if self.step_lang_type > 0:
             if self.step_lang_type == 41:
@@ -368,8 +560,10 @@ class MVT(nn.Module):
                             norm=None,
                             activation=None,)
                     )
+                print('------------')
                 print(f'use per-step language instruction to help improve the generalization across tasks,'
                       f' and use type {self.step_lang_type}.')
+                print('------------')
             elif self.step_lang_type == 42:
                 # in first stage, the agent predict the low-level language instruction
                 # in second stage, use the ground-truth to train and use the prediction to eval
@@ -386,8 +580,10 @@ class MVT(nn.Module):
                             norm=None,
                             activation=None,)
                     )
+                print('------------')
                 print(f'use per-step language instruction to help improve the generalization across tasks,'
                       f' and use type {self.step_lang_type}.')
+                print('------------')
             elif self.step_lang_type == 43:
                 # in first stage, the agent predict the low-level language instruction
                 # in second stage, use the ground-truth to train and use the prediction to eval
@@ -404,12 +600,16 @@ class MVT(nn.Module):
                             norm=None,
                             activation=None,)
                     )
+                print('------------')
                 print(f'use per-step language instruction to help improve the generalization across tasks,'
                       f' and use type {self.step_lang_type}.')
+                print('------------')
             elif self.step_lang_type == 44:
                 # use the low-level language instruction
+                print('------------')
                 print(f'use per-step language instruction to help improve the generalization across tasks,'
                       f' and use type {self.step_lang_type}.')
+                print('------------')
 
         if self.add_proprio:
             # proprio preprocessing encoder
@@ -463,47 +663,47 @@ class MVT(nn.Module):
             self.layers.append(
                 nn.ModuleList([get_attn_attn(**cache_args), get_attn_ff(**cache_args)])
             )
-
-        if cvx_up:
-            self.up0 = ConvexUpSample(
-                in_dim=self.input_dim_before_seq,
-                out_dim=1,
-                up_ratio=self.img_patch_size,
-            )
-        else:
-            self.up0 = Conv2DUpsampleBlock(
-                self.input_dim_before_seq,
-                self.im_channels,
-                kernel_sizes=self.img_patch_size,
-                strides=self.img_patch_size,
-                norm=None,
-                activation=activation,
-                out_size=self.img_size,
-            )
-
-            if self.inp_pre_con:
-                final_inp_dim = self.im_channels + inp_pre_out_dim
+        if not self.pre_image_process == 9:
+            if cvx_up:
+                self.up0 = ConvexUpSample(
+                    in_dim=self.input_dim_before_seq,
+                    out_dim=1,
+                    up_ratio=self.img_patch_size,
+                )
             else:
-                final_inp_dim = self.im_channels
+                self.up0 = Conv2DUpsampleBlock(
+                    self.input_dim_before_seq,
+                    self.im_channels,
+                    kernel_sizes=self.img_patch_size,
+                    strides=self.img_patch_size,
+                    norm=None,
+                    activation=activation,
+                    out_size=self.img_size,
+                )
 
-            # final layers
-            self.final = Conv2DBlock(
-                final_inp_dim,
-                self.im_channels,
-                kernel_sizes=3,
-                strides=1,
-                norm=None,
-                activation=activation,
-            )
+                if self.inp_pre_con:
+                    final_inp_dim = self.im_channels + inp_pre_out_dim
+                else:
+                    final_inp_dim = self.im_channels
 
-            self.trans_decoder = Conv2DBlock(
-                self.final_dim,
-                1,
-                kernel_sizes=3,
-                strides=1,
-                norm=None,
-                activation=None,
-            )
+                # final layers
+                self.final = Conv2DBlock(
+                    final_inp_dim,
+                    self.im_channels,
+                    kernel_sizes=3,
+                    strides=1,
+                    norm=None,
+                    activation=activation,
+                )
+
+                self.trans_decoder = Conv2DBlock(
+                    self.final_dim,
+                    1,
+                    kernel_sizes=3,
+                    strides=1,
+                    norm=None,
+                    activation=None,
+                )
 
         if not self.no_feat:
             feat_fc_dim = 0
@@ -634,7 +834,7 @@ class MVT(nn.Module):
                 # (bs * num_img * num_p * num_p, d)
                 ins = rearrange(torch.cat((processed_image_patches, processed_depth_patches), dim=-1),
                                 'b p d -> (b p) d')
-            # (bs*num_img, im_channel/2, num_p, num_p)
+            # (bs*num_img, im_channels, num_p, num_p)
             processed_pos_emb = self.patchify(pos_info)
 
             # (bs*num_img*num_p*num_p, im_channels)
@@ -713,6 +913,44 @@ class MVT(nn.Module):
             processed_pos_emb = rearrange(processed_pos_emb, '(b n) d p1 p2->b d n p1 p2', b=bs, n=num_img)
             # (bs, im_channels, num_img, np, np)
             ins = ins+processed_pos_emb
+        elif self.pre_image_process == 9:
+            # process rgb with grounding-dino, use loc info as position embedding
+            with torch.no_grad():
+                rgb_views_image = rearrange(d0[:, 3:6, :, :], '(b nv) ... -> b nv ...', b=bs)
+                # (bs * num_img, 6, h, w)
+                pos_info = torch.cat((d0[:, 0:3, :, :], d0[:, 7:, :, :]), dim=1)
+                obj_caption = []
+                for lang in lang_goal:
+                    if lang[0].split()[-1] == 'cup' or lang[0].split()[-1] == 'spoke':
+                        # stack cups and insert onto square peg
+                        obj_caption.append(" ".join(lang[0].split()[-2:]))
+                    elif lang[0].split()[3] == 'chess':
+                        # setup chess
+                        obj_caption.append(" ".join(lang[0].split()[2:5]))
+                    elif lang[0].split()[4] == 'chess':
+                        # setup chess
+                        obj_caption.append(" ".join(lang[0].split()[3:6]))
+                    else:
+                        raise ValueError('unsupported environment')
+                obj_caption = np.array(obj_caption).reshape(-1, 1)
+                # (bs * num_img, 1045, 256)
+                groundingdino_feat = self.groundingdino_feature_extractor(rgb_views_image, obj_caption)
+            # (bs * num_img, 1045, im_channel)
+            obj_feat = self.groundingdino_preprocess(groundingdino_feat)
+            # (bs * num_img, im_channel, 1045)
+            ins = rearrange(obj_feat, 'b p d -> b d p')
+
+            # (bs * num_img, img_channel, num_p, num_p)
+            pos_emb_all = []
+            for num_l in range(self.num_level):
+                pos_emb_all.append(self.patchify_layers[num_l](pos_info).reshape(bs*num_img, self.im_channels, -1))
+            # (bs * num_img, im_channel, 1045)
+            pos_emb_all = torch.cat(pos_emb_all, dim=-1)
+
+            # (bs * num_img, im_channel, 1045)
+            ins += pos_emb_all
+            # (bs, im_channel, num_img, 1045)
+            ins = rearrange(ins, '(b nv) c d -> b c nv d', b=bs)
         else:
             # (bs * num_img, im_channels, h, w) ->
             # (bs * num_img, im_channels, h / img_patch_strid, w / img_patch_strid) patches
@@ -732,22 +970,37 @@ class MVT(nn.Module):
 
 
         # concat proprio
-        _, _, _d, _h, _w = ins.shape
         if self.add_proprio:
-            p = self.proprio_preprocess(proprio)  # [B,4] -> [B,64]
-            p = p.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).repeat(1, 1, _d, _h, _w)
-            ins = torch.cat([ins, p], dim=1)  # [B, 128, num_img, np, np]
+            if self.pre_image_process == 9:
+                p = self.proprio_preprocess(proprio)  # [B,4] -> [B,64]
+                p = p.unsqueeze(-1).unsqueeze(-1).repeat(1, 1, num_img, 1045)
+                ins = torch.cat([ins, p], dim=1)  # [B, 128, num_img, 1045]
+            else:
+                _, _, _d, _h, _w = ins.shape
+                p = self.proprio_preprocess(proprio)  # [B,4] -> [B,64]
+                p = p.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).repeat(1, 1, _d, _h, _w)
+                ins = torch.cat([ins, p], dim=1)  # [B, 128, num_img, np, np]
 
-        # channel last
-        ins = rearrange(ins, "b d ... -> b ... d")  # [B, num_img, np, np, 128]
+        if self.pre_image_process == 9:
+            # channel last
+            ins = rearrange(ins, "b d ... -> b ... d")  # [B, num_img, 1045, 128]
 
-        # save original shape of input for layer
-        ins_orig_shape = ins.shape
+            # save original shape of input for layer
+            ins_orig_shape = ins.shape
 
-        # flatten patches into sequence
-        ins = rearrange(ins, "b ... d -> b (...) d")  # [B, num_img * np * np, 128]
+            # flatten patches into sequence
+            ins = rearrange(ins, "b ... d -> b (...) d")  # [B, num_img * 1045, 128]
+        else:
+            # channel last
+            ins = rearrange(ins, "b d ... -> b ... d")  # [B, num_img, np, np, 128]
 
-        # add learable pos encoding
+            # save original shape of input for layer
+            ins_orig_shape = ins.shape
+
+            # flatten patches into sequence
+            ins = rearrange(ins, "b ... d -> b (...) d")  # [B, num_img * np * np, 128]
+
+        # add learnable pos encoding
         # only added to image tokens
         if self.pe_fix:
             ins += self.pos_encoding
@@ -786,6 +1039,63 @@ class MVT(nn.Module):
 
             ins = torch.cat((l, ins), dim=1)  # [B, num_img * np * np + 77, 128]
 
+        # append object features as sequence
+        if self.add_object > 0:
+            rgb_views_image = rearrange(d0[:, 3:6, :, :], '(b nv) ... -> b nv ...', b=bs)
+            obj_caption = []
+            for lang in lang_goal:
+                if lang[0].split()[-1] == 'cup' or lang[0].split()[-1] == 'spoke':
+                    # stack cups and insert onto square peg
+                    obj_caption.append(" ".join(lang[0].split()[-2:]))
+                elif lang[0].split()[3] == 'chess':
+                    # setup chess
+                    obj_caption.append(" ".join(lang[0].split()[2:5]))
+                elif lang[0].split()[4] == 'chess':
+                    # setup chess
+                    obj_caption.append(" ".join(lang[0].split()[3:6]))
+                else:
+                    raise ValueError('unsupported environment')
+            obj_caption = np.array(obj_caption).reshape(-1, 1)
+            if self.add_object in {1, 2}:
+                # [b*num_img, 1045, 256]
+                groundingdino_feat = self.groundingdino_feature_extractor(rgb_views_image, obj_caption)
+                # [b*num_img, 1045, self.img_channel*2]
+                obj_feat = self.groundingdino_preprocess(groundingdino_feat)
+                obj_feat = rearrange(obj_feat, '(b nv) p d -> b (nv p) d', b=bs)
+                ins = torch.cat((ins, obj_feat), dim=1)  # [B, num_img * np * np + 77 + 1045*3, 128]
+            elif self.add_object in {3, 4}:
+                # [b*num_img, num_query, 256], [b*num_img, num_query, 4]
+                groundingdino_feat, groundingdino_pos = self.groundingdino_feature_extractor.\
+                    forward_query(rgb_views_image, obj_caption)
+                # [b*num_img, num_query, self.img_channel*2]
+                obj_feat = self.groundingdino_preprocess(groundingdino_feat)
+                # [b*num_img, num_query, self.img_channel*2]
+                obj_pos = self.groundingdino_query_pos_emb(groundingdino_pos)
+                obj_feat += obj_pos
+
+                obj_feat = rearrange(obj_feat, '(b nv) p d -> b (nv p) d', b=bs)
+                ins = torch.cat((ins, obj_feat), dim=1)  # [B, num_img * np * np + 77 + num_img*num_query, 128]
+            elif self.add_object in {5, 6}:
+                rgb_views_image = rearrange(d0[:, 3:6, :, :], '(b nv) ... -> b nv ...', b=bs)
+                # currently, we only consider stack cups and insert onto square peg
+                assert lang_goal[0, 0].split()[-1] == 'cup' or lang_goal[0, 0].split()[-1] == 'spoke'
+                obj_caption = np.array([" ".join(lang[0].split()[-2:]) for lang in lang_goal]).reshape(-1, 1)
+                # [b*num_img*K, 3, h, w], [b*num_img, K, 4]
+                box_roi, box_pos = self.groundingdino_feature_extractor.\
+                    forward_box_feature(rgb_views_image, obj_caption)
+                with torch.no_grad():
+                    # [b*num_img*K, 768]
+                    box_feat = self.clip_model(box_roi)
+                # [b*num_img*K, self.img_channel*2]
+                obj_feat = self.box_feat_preprocess(box_feat)
+                obj_feat = rearrange(obj_feat, '(b nv K) ... -> (b nv) K ...', b=bs, nv=num_img)
+                # [b*num_img, K, self.img_channel*2]
+                obj_pos = self.box_pos_emb(box_pos)
+                obj_feat += obj_pos
+
+                obj_feat = rearrange(obj_feat, '(b nv) p d -> b (nv p) d', b=bs)
+                ins = torch.cat((ins, obj_feat), dim=1)  # [B, num_img * np * np + 77 + num_img*K, 128]
+
         # add learnable pos encoding
         if not self.pe_fix:
             ins += self.pos_encoding
@@ -815,6 +1125,15 @@ class MVT(nn.Module):
         elif self.self_cross_ver == 2:
             assert self.pre_image_process > 0
             # cross attention
+            if self.add_object in {2, 4, 6}:
+                # attn image feature with object feature first
+                img_obj_x = x[:, num_lang_tok:]
+                lang_x = x[:, :num_lang_tok]
+                for self_attn, self_ff in self.layers[:len(self.layers) // 2]:
+                    img_obj_x = self_attn(img_obj_x) + img_obj_x
+                    img_obj_x = self_ff(img_obj_x) + img_obj_x
+                img_x = img_obj_x[:, :num_img*num_pat_img*num_pat_img]
+                x = torch.cat((lang_x, img_x), dim=1)
             for self_attn, self_ff in self.layers[len(self.layers) // 2:]:
                 x = self_attn(x) + x
                 x = self_ff(x) + x
@@ -835,38 +1154,67 @@ class MVT(nn.Module):
         # append language features as sequence
         if self.add_lang:
             # throwing away the language embeddings
-            x = x[:, num_lang_tok:]
+            if self.add_object > 0:
+                x = x[:, num_lang_tok:num_lang_tok+num_img*num_pat_img*num_pat_img]
+            else:
+                x = x[:, num_lang_tok:]
 
         x = self.fc_aft_attn(x)
 
         # reshape back to original size
-        x = x.view(bs, *ins_orig_shape[1:-1], x.shape[-1])  # [B, num_img, np, np, 128]
-        x = rearrange(x, "b ... d -> b d ...")  # [B, 128, num_img, np, np]
-
-        feat = []
-        _feat = torch.max(torch.max(x, dim=-1)[0], dim=-1)[0]
-        _feat = _feat.view(bs, -1)
-        feat.append(_feat)
-
-        x = (
-            x.transpose(1, 2)
-            .clone()
-            .view(
-                bs * self.num_img, self.input_dim_before_seq, num_pat_img, num_pat_img
-            )
-        )
-
-        if self.cvx_up:
-            trans = self.up0(x)
-            trans = trans.view(bs, self.num_img, h, w)
+        if self.pre_image_process == 9:
+            x = x.view(bs, *ins_orig_shape[1:-1], x.shape[-1])  # [B, num_img, 1045, 128]
+            x = rearrange(x, "b ... d -> b d ...")  # [B, 128, num_img, 1045]
         else:
-            u0 = self.up0(x)
-            if self.inp_pre_con:
-                u0 = torch.cat([u0, d0], dim=1)
-            u = self.final(u0)
+            x = x.view(bs, *ins_orig_shape[1:-1], x.shape[-1])  # [B, num_img, np, np, 128]
+            x = rearrange(x, "b ... d -> b d ...")  # [B, 128, num_img, np, np]
 
-            # translation decoder
-            trans = self.trans_decoder(u).view(bs, self.num_img, h, w)
+        if not self.no_feat:
+            feat = []
+            _feat = torch.max(torch.max(x, dim=-1)[0], dim=-1)[0]
+            _feat = _feat.view(bs, -1)
+            feat.append(_feat)
+
+        if self.pre_image_process == 9:
+            x = (
+                x.transpose(1, 2)
+                .clone()
+                .view(
+                    bs * self.num_img, self.input_dim_before_seq, -1
+                )
+            )
+
+            trans_list = []
+            patch_num = self.num_patch_per_level**2
+            patch_ind = [int(np.sum(patch_num[:i+1])) for i in range(self.num_level)]
+            patch_ind.insert(0, 0)
+            for num_l in range(self.num_level):
+                x_level = x[:, :, patch_ind[num_l]:patch_ind[num_l+1]]
+                x_level = rearrange(x_level, 'b d (p1 p2) -> b d p1 p2', p1=self.num_patch_per_level[num_l])
+                trans_level = self.ups[num_l](x_level)
+                trans_list.append(trans_level.view(bs, self.num_img, h, w))
+            trans_list = torch.stack(trans_list)
+            trans = torch.mean(trans_list, dim=0)
+        else:
+            x = (
+                x.transpose(1, 2)
+                .clone()
+                .view(
+                    bs * self.num_img, self.input_dim_before_seq, num_pat_img, num_pat_img
+                )
+            )
+
+            if self.cvx_up:
+                trans = self.up0(x)
+                trans = trans.view(bs, self.num_img, h, w)
+            else:
+                u0 = self.up0(x)
+                if self.inp_pre_con:
+                    u0 = torch.cat([u0, d0], dim=1)
+                u = self.final(u0)
+
+                # translation decoder
+                trans = self.trans_decoder(u).view(bs, self.num_img, h, w)
 
         if not self.no_feat:
             if self.feat_ver == 0:

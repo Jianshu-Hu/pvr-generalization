@@ -66,6 +66,7 @@ class MVT(nn.Module):
         pre_image_process,
         pre_heat_map,
         step_lang_type,
+        add_obj,
         renderer_device="cuda:0",
     ):
         """MultiView Transfomer
@@ -89,6 +90,7 @@ class MVT(nn.Module):
             in each view to augment the pc
         :param step_lang_type: label the action per step with a specific language instruction and align the action with
             this language instruction for generalization across different tasks
+        :param add_obj: add object-centric feature for better localizing the language-aligned objects in the scene
         """
         super().__init__()
 

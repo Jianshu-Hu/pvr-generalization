@@ -752,6 +752,17 @@ class RVTAgent:
 
             self._optimizer.zero_grad(set_to_none=True)
             self.scaler.scale(total_loss).backward()
+
+            # # Check GPU memory usage
+            # if torch.cuda.is_available():
+            #     device = torch.cuda.current_device()
+            #     print(f"Using GPU: {torch.cuda.get_device_name(device)}")
+            #     print(f"Total GPU Memory: {torch.cuda.get_device_properties(device).total_memory / 1024 ** 3:.2f} GB")
+            #     print(f"Allocated GPU Memory: {torch.cuda.memory_allocated(device) / 1024 ** 3:.2f} GB")
+            #     print(f"Cached GPU Memory: {torch.cuda.memory_cached(device) / 1024 ** 3:.2f} GB")
+            # else:
+            #     print("No GPU available, using CPU instead.")
+
             self.scaler.step(self._optimizer)
             self.scaler.update()
             self._lr_sched.step()

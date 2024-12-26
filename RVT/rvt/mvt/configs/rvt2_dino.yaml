@@ -18,3 +18,4 @@ pre_image_process: 8
 self_cross_ver: 2
 pre_heat_map: False
 step_lang_type: 0
+add_obj: 0
