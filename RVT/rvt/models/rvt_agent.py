@@ -30,6 +30,8 @@ from yarr.agents.agent import ActResult
 from rvt.utils.dataset import _clip_encode_text
 from rvt.utils.lr_sched_utils import GradualWarmupScheduler
 
+from rvt.models.llama_image_analyzer import ImageAnalyzer
+
 
 def eval_con(gt, pred):
     assert gt.shape == pred.shape, print(f"{gt.shape} {pred.shape}")
@@ -406,9 +408,18 @@ class RVTAgent:
         self.clip_model, self.clip_preprocess = clip.load("RN50", device=self._device)
         self.clip_model.eval()
 
+        # load llama
+        if self._network.mvt1.step_lang_type in {44}:
+            self.image_analyzer = ImageAnalyzer()
+
     def unload_clip(self):
         del self.clip_model
         del self.clip_preprocess
+
+        # unload llama
+        if self._network.mvt1.step_lang_type in {44}:
+            del self.image_analyzer
+
         with torch.cuda.device(self._device):
             torch.cuda.empty_cache()
 
@@ -830,13 +841,10 @@ class RVTAgent:
             if self._network.mvt1.step_lang_type in {44}:
                 if not hasattr(self, 'counter'):
                     self.counter = 0
-                # while os.path.exists(f'img_front_rgb_{self.counter}.npy'):
-                #     self.counter += 1
-                # print(observation['front_rgb'].shape)
+                else:
+                    self.counter += 1
                 # np.save(f'img_front_rgb_{self.counter}.npy', observation['front_rgb'].cpu().numpy()[0, 0])
                 # print(f'save to img_front_rgb_{self.counter}.npy')
-                # if self.counter == 5:
-                #     raise ValueError('stop')
 
                 # step_description_list = [
                 #     'The robot arm begins to descend, angling itself towards the chess piece on the board.',
@@ -845,19 +853,24 @@ class RVTAgent:
                 #     'The robot arm transitions horizontally, carrying the chess piece towards its designated initial position on the board.',
                 #     'The robot arm lowers the chess piece into place and releases it, completing the task of placing the piece on the board.'
                 # ]
+                # step_description_list = [
+                #     "The robot arm moves downwards, positioning itself closer to the ring on the table.",
+                #     "The robot arm extends its grip to securely grasp the ring.",
+                #     "The robot arm lifts the ring off the table, preparing to move it.",
+                #     "The robot arm rotates slightly while moving to align the ring with the red spoke.",
+                #     "The robot arm moves downwards and releases the ring onto the red spoke."
+                # ]
 
-                step_description_list = [
-                    "The robot arm moves downwards, positioning itself closer to the ring on the table.",
-                    "The robot arm extends its grip to securely grasp the ring.",
-                    "The robot arm lifts the ring off the table, preparing to move it.",
-                    "The robot arm rotates slightly while moving to align the ring with the red spoke.",
-                    "The robot arm moves downwards and releases the ring onto the red spoke."
-                ]
-                step_description = step_description_list[self.counter % 5]
-                step_desc_tokens = clip.tokenize([step_description]).numpy()
-                step_desc_tokens_tensor = torch.from_numpy(step_desc_tokens).to(self._device)
+                if step == 0:
+                    self.step_description_list = self.image_analyzer.analyze_single_image(
+                        observation['front_rgb'].cpu().numpy()[0, 0],
+                        lang_goal=lang_goal)
 
-                self.counter += 1
+                # step_description = input("Choose the action to continue: ")
+                # print(f'use step language instruction: {step_description}')
+                print(self.step_description_list[step % len(self.step_description_list)])
+                step_desc_tokens = clip.tokenize([self.step_description_list[step % len(self.step_description_list)]])
+                step_desc_tokens_tensor = step_desc_tokens.to(self._device)
 
                 with torch.no_grad():
                     _, step_tokens_embs = _clip_encode_text(self.clip_model, step_desc_tokens_tensor)

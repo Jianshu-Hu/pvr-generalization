@@ -251,7 +251,7 @@ class MVT(nn.Module):
             inp_pre_out_dim = inp_img_feat_dim
 
         if self.pre_image_process > 0:
-            if self.pre_image_process in {9, 10, 11}:
+            if self.pre_image_process in {9, 10, 11, 12}:
                 # in first stage, use grounding-dino feature
                 if not self.no_feat:
                     # in second stage, use clip and dino
@@ -260,7 +260,7 @@ class MVT(nn.Module):
             print(f'use pretrained image encoder to preprocess the rgb images'
                   f' and use type {self.pre_image_process}.')
             print('------------')
-            if self.pre_image_process not in {9, 10}:
+            if self.pre_image_process not in {9, 10, 12}:
                 # load pretrained dinov2
                 # self.pretrained_image_encoder = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14_reg')
                 self.pretrained_image_encoder = torch.hub.load('../../pvr_ckpts/facebookresearch_dinov2_main',
@@ -351,7 +351,7 @@ class MVT(nn.Module):
                     activation=activation,
                     padding=0,
                 )
-            elif self.pre_image_process in {9, 10}:
+            elif self.pre_image_process in {9, 10, 12}:
                 assert self.cvx_up
                 self.groundingdino_feature_extractor = GroundingDinoFeature()
                 self.groundingdino_preprocess = DenseBlock(
@@ -729,7 +729,7 @@ class MVT(nn.Module):
             self.layers.append(
                 nn.ModuleList([get_attn_attn(**cache_args), get_attn_ff(**cache_args)])
             )
-        if not self.pre_image_process in {9, 10, 11}:
+        if not self.pre_image_process in {9, 10, 11, 12}:
             if cvx_up:
                 self.up0 = ConvexUpSample(
                     in_dim=self.input_dim_before_seq,
@@ -979,7 +979,7 @@ class MVT(nn.Module):
             processed_pos_emb = rearrange(processed_pos_emb, '(b n) d p1 p2->b d n p1 p2', b=bs, n=num_img)
             # (bs, im_channels, num_img, np, np)
             ins = ins+processed_pos_emb
-        elif self.pre_image_process in {9, 10}:
+        elif self.pre_image_process in {9, 10, 12}:
             # process rgb with grounding-dino, use loc info as position embedding
             with torch.no_grad():
                 rgb_views_image = rearrange(d0[:, 3:6, :, :], '(b nv) ... -> b nv ...', b=bs)
@@ -989,10 +989,13 @@ class MVT(nn.Module):
                 for lang in lang_goal:
                     if lang[0].split()[-1] == 'cup':
                         # stack cups
-                        obj_caption.append(" ".join(lang[0].split()[-2:]))
+                        if self.pre_image_process in {12}:
+                            obj_caption.append('cups')
+                        else:
+                            obj_caption.append(" ".join(lang[0].split()[-2:]))
                     elif lang[0].split()[-1] == 'spoke':
                         # insert onto square peg
-                        if self.pre_image_process == 9:
+                        if self.pre_image_process in {9, 12}:
                             obj_caption.append(" ".join(lang[0].split()[-2:]))
                         elif self.pre_image_process == 10:
                             obj_caption.append(" ".join(lang[0].split()[-2:])+" and the ring")
@@ -1039,10 +1042,7 @@ class MVT(nn.Module):
                         obj_caption.append(" ".join(lang[0].split()[-2:]))
                     elif lang[0].split()[-1] == 'spoke':
                         # insert onto square peg
-                        if self.pre_image_process in {9, 11}:
-                            obj_caption.append(" ".join(lang[0].split()[-2:]))
-                        elif self.pre_image_process == 10:
-                            obj_caption.append(" ".join(lang[0].split()[-2:])+" and the ring")
+                        obj_caption.append(" ".join(lang[0].split()[-2:]))
                     elif lang[0].split()[3] == 'chess':
                         # setup chess
                         obj_caption.append(" ".join(lang[0].split()[2:5]))
@@ -1096,7 +1096,7 @@ class MVT(nn.Module):
 
         # concat proprio
         if self.add_proprio:
-            if self.pre_image_process in {9, 10}:
+            if self.pre_image_process in {9, 10, 12}:
                 p = self.proprio_preprocess(proprio)  # [B,4] -> [B,64]
                 p = p.unsqueeze(-1).unsqueeze(-1).repeat(1, 1, num_img, 1045)
                 ins = torch.cat([ins, p], dim=1)  # [B, 128, num_img, 1045]
@@ -1110,7 +1110,7 @@ class MVT(nn.Module):
                 p = p.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).repeat(1, 1, _d, _h, _w)
                 ins = torch.cat([ins, p], dim=1)  # [B, 128, num_img, np, np]
 
-        if self.pre_image_process in {9, 10, 11}:
+        if self.pre_image_process in {9, 10, 11, 12}:
             # channel last
             ins = rearrange(ins, "b d ... -> b ... d")  # [B, num_img, 1045, 128] or [B, num_img, 1045+np*np, 128]
 
@@ -1297,7 +1297,7 @@ class MVT(nn.Module):
         x = self.fc_aft_attn(x)
 
         # reshape back to original size
-        if self.pre_image_process in {9, 10, 11}:
+        if self.pre_image_process in {9, 10, 11, 12}:
             x = x.view(bs, *ins_orig_shape[1:-1], x.shape[-1])  # [B, num_img, 1045, 128] or [B, num_img, 1045+np*np, 128]
             x = rearrange(x, "b ... d -> b d ...")  # [B, 128, num_img, 1045] or [B, 128, num_img, 1045+np*np]
         else:
@@ -1310,7 +1310,7 @@ class MVT(nn.Module):
             _feat = _feat.view(bs, -1)
             feat.append(_feat)
 
-        if self.pre_image_process in {9, 10, 11}:
+        if self.pre_image_process in {9, 10, 11, 12}:
             x = (
                 x.transpose(1, 2)
                 .clone()
