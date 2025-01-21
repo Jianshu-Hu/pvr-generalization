@@ -1,6 +1,6 @@
 [submodule "robot-colosseum"]
 	path = robot-colosseum
-	url = https://github.com/robot-colosseum/robot-colosseum.git
+	url = https://github.com/Jianshu-Hu/robot-colosseum-rvt.git
 [submodule "pyrep"]
 	path = pyrep
 	url = https://github.com/stepjam/PyRep.git
