@@ -50,7 +50,7 @@ class ImageAnalyzer:
         """
         if lang_goal.split()[-1] == 'cup':
             prompt = f'This is the scene of a robot {lang_goal}.' \
-                     f' What are the colors of the three cups in this image? You can only choose from ' +\
+                     f' What are the colors of the cups in this image? You can only choose from ' +\
                      ", ".join(self.color_list)
         image = Image.fromarray(image.transpose(1, 2, 0))
         messages = [
@@ -92,22 +92,42 @@ class ImageAnalyzer:
 
             # Return unique colors found (case insensitive)
             colors = list(color.lower() for color in colors_found)
-            assert len(colors) == 3
             assert lang_goal.split()[-2] in colors
             # target cup should be put at the end
             colors.remove(lang_goal.split()[-2])
             colors.append(lang_goal.split()[-2])
             print(f'the colors of the cups are: {colors}')
-            step_description_list = [
-                f'The robot arm moves downwards, positioning itself to grasp the {colors[0]} cup.',
-                f'The robot arm grasps the {colors[0]} cup with its gripper.',
-                f'The arm lifts the {colors[0]} cup.',
-                f'The robot arm moves the {colors[0]} cup above the {colors[2]} cup.',
-                f'The arm lowers the {colors[0]} cup onto the {colors[2]} cup, releasing it to stack successfully.',
-                f'The robot arm adjusts its position, preparing to grab the {colors[1]} cup.',
-                f'The robot arm grasps the {colors[1]} cup with its gripper.',
-                f'The arm lifts the {colors[1]} cup.',
-                f'The robot arm moves the {colors[1]} cup above the stack.',
-                f'The arm lowers the {colors[1]} cup onto the stack, releasing it and completing the task.'
-            ]
+            if len(colors) == 3:
+                step_description_list = [
+                    f'The robot arm moves downwards, positioning itself to grasp the {colors[0]} cup.',
+                    f'The robot arm grasps the {colors[0]} cup with its gripper.',
+                    f'The arm lifts the {colors[0]} cup.',
+                    f'The robot arm moves the {colors[0]} cup above the {colors[2]} cup.',
+                    f'The arm lowers the {colors[0]} cup onto the {colors[2]} cup, releasing it to stack successfully.',
+                    f'The robot arm adjusts its position, preparing to grab the {colors[1]} cup.',
+                    f'The robot arm grasps the {colors[1]} cup with its gripper.',
+                    f'The arm lifts the {colors[1]} cup.',
+                    f'The robot arm moves the {colors[1]} cup above the stack.',
+                    f'The arm lowers the {colors[1]} cup onto the stack, releasing it and completing the task.'
+                ]
+            elif len(colors) == 4:
+                step_description_list = [
+                    f'The robot arm moves downwards, positioning itself to grasp the {colors[0]} cup.',
+                    f'The robot arm grasps the {colors[0]} cup with its gripper.',
+                    f'The arm lifts the {colors[0]} cup.',
+                    f'The robot arm moves the {colors[0]} cup above the {colors[3]} cup.',
+                    f'The arm lowers the {colors[0]} cup onto the {colors[3]} cup, releasing it to stack successfully.',
+                    f'The robot arm adjusts its position, preparing to grab the {colors[1]} cup.',
+                    f'The robot arm grasps the {colors[1]} cup with its gripper.',
+                    f'The arm lifts the {colors[1]} cup.',
+                    f'The robot arm moves the {colors[1]} cup above the stack.',
+                    f'The arm lowers the {colors[1]} cup onto the stack, releasing it to stack successfully.'
+                    f'The robot arm adjusts its position, preparing to grab the {colors[2]} cup.',
+                    f'The robot arm grasps the {colors[2]} cup with its gripper.',
+                    f'The arm lifts the {colors[2]} cup.',
+                    f'The robot arm moves the {colors[2]} cup above the stack.',
+                    f'The arm lowers the {colors[2]} cup onto the stack, releasing it and completing the task.'
+                ]
+            else:
+                raise ValueError('Wrong number of cups detected in the scene.')
         return step_description_list

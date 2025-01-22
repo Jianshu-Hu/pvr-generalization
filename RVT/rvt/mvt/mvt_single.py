@@ -251,7 +251,7 @@ class MVT(nn.Module):
             inp_pre_out_dim = inp_img_feat_dim
 
         if self.pre_image_process > 0:
-            if self.pre_image_process in {9, 10, 11, 12}:
+            if self.pre_image_process in {9, 10}:
                 # in first stage, use grounding-dino feature
                 if not self.no_feat:
                     # in second stage, use clip and dino
@@ -260,7 +260,7 @@ class MVT(nn.Module):
             print(f'use pretrained image encoder to preprocess the rgb images'
                   f' and use type {self.pre_image_process}.')
             print('------------')
-            if self.pre_image_process not in {9, 10, 12}:
+            if self.pre_image_process not in {9, 10}:
                 # load pretrained dinov2
                 # self.pretrained_image_encoder = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14_reg')
                 self.pretrained_image_encoder = torch.hub.load('../../pvr_ckpts/facebookresearch_dinov2_main',
@@ -351,7 +351,7 @@ class MVT(nn.Module):
                     activation=activation,
                     padding=0,
                 )
-            elif self.pre_image_process in {9, 10, 12}:
+            elif self.pre_image_process in {9, 10}:
                 assert self.cvx_up
                 self.groundingdino_feature_extractor = GroundingDinoFeature()
                 self.groundingdino_preprocess = DenseBlock(
@@ -396,73 +396,6 @@ class MVT(nn.Module):
                         out_dim=1,
                         up_ratio=self.patch_size[num_l],
                     ))
-            elif self.pre_image_process == 11:
-                assert self.cvx_up
-                self.groundingdino_feature_extractor = GroundingDinoFeature()
-                self.groundingdino_preprocess = DenseBlock(
-                    256,
-                    self.im_channels,
-                    norm="layer",
-                    activation=activation,
-                )
-                self.img_compress_fc = DenseBlock(
-                    img_emb_dim,
-                    self.im_channels,
-                    norm="layer",
-                    activation=activation,
-                )
-
-                inp_pre_out_dim -= 4
-                self.num_level = 4
-                self.patch_size = np.array([8, 16, 32, 56])
-                self.num_patch_per_level = (img_size/self.patch_size).astype('int32')
-                self.patchify_layers = nn.ModuleList()
-                for num_l in range(self.num_level):
-                    self.patchify_layers.append(Conv2DBlock(
-                        inp_pre_out_dim,
-                        self.im_channels,
-                        kernel_sizes=self.patch_size[num_l],
-                        strides=self.patch_size[num_l],
-                        norm="group",
-                        activation=activation,
-                        padding=0,
-                    ))
-                # dino feature
-                self.patchify_layers.append(Conv2DBlock(
-                    inp_pre_out_dim,
-                    self.im_channels,
-                    kernel_sizes=self.img_patch_size,
-                    strides=self.img_patch_size,
-                    norm="group",
-                    activation=activation,
-                    padding=0,
-                ))
-
-                if self.pe_fix:
-                    num_pe_token = (1045 + spatial_size ** 2) * self.num_img
-                else:
-                    num_pe_token = lang_max_seq_len + (1045 + spatial_size**2) * self.num_img
-                self.pos_encoding = nn.Parameter(
-                    torch.randn(
-                        1,
-                        num_pe_token,
-                        self.input_dim_before_seq,
-                    )
-                )
-
-                self.ups = nn.ModuleList()
-                for num_l in range(self.num_level):
-                    self.ups.append(ConvexUpSample(
-                        in_dim=self.input_dim_before_seq,
-                        out_dim=1,
-                        up_ratio=self.patch_size[num_l],
-                    ))
-                # dino feature
-                self.ups.append(ConvexUpSample(
-                    in_dim=self.input_dim_before_seq,
-                    out_dim=1,
-                    up_ratio=self.img_patch_size,
-                ))
         else:
             self.patchify = Conv2DBlock(
                 inp_pre_out_dim,
@@ -480,24 +413,6 @@ class MVT(nn.Module):
                 if self.no_feat:
                     # this is only used in stage one
                     # simply append the feature from groundingdino
-                    self.groundingdino_feature_extractor = GroundingDinoFeature()
-                    self.groundingdino_preprocess = DenseBlock(
-                        256,
-                        self.im_channels * 2,
-                        norm='layer',
-                        activation=activation,
-                    )
-                    print('------------')
-                    print(f'use object-centric feature to help improve the ability of'
-                          f' localizing the task-related objects in the scene,'
-                          f' and use type {self.add_object}.')
-                    print('------------')
-                else:
-                    self.add_object = 0
-            elif self.add_object == 2:
-                if self.no_feat:
-                    # this is only used in stage one
-                    # attention the feature from groundingdino with image feature first
                     self.groundingdino_feature_extractor = GroundingDinoFeature()
                     self.groundingdino_preprocess = DenseBlock(
                         256,
@@ -536,58 +451,10 @@ class MVT(nn.Module):
                     print('------------')
                 else:
                     self.add_object = 0
-            elif self.add_object == 4:
-                if self.no_feat:
-                    # this is only used in stage one
-                    # attend the query from groundingdino with image feature first
-                    self.groundingdino_feature_extractor = GroundingDinoFeature()
-                    self.groundingdino_preprocess = DenseBlock(
-                        256,
-                        self.im_channels * 2,
-                        norm='layer',
-                        activation=activation,
-                    )
-                    self.groundingdino_query_pos_emb = DenseBlock(
-                        4,
-                        self.im_channels * 2,
-                        norm='layer',
-                        activation=activation,
-                    )
-                    print('------------')
-                    print(f'use object-centric feature to help improve the ability of'
-                          f' localizing the task-related objects in the scene,'
-                          f' and use type {self.add_object}.')
-                    print('------------')
-                else:
-                    self.add_object = 0
             elif self.add_object == 5:
                 if self.no_feat:
                     # this is only used in stage one
                     # append the box feature from clip
-                    self.groundingdino_feature_extractor = GroundingDinoFeature(num_queries=900, K=5)
-                    self.box_feat_preprocess = DenseBlock(
-                        768,
-                        self.im_channels * 2,
-                        norm='layer',
-                        activation=activation,
-                    )
-                    self.box_pos_emb = DenseBlock(
-                        4,
-                        self.im_channels * 2,
-                        norm='layer',
-                        activation=activation,
-                    )
-                    print('------------')
-                    print(f'use object-centric feature to help improve the ability of'
-                          f' localizing the task-related objects in the scene,'
-                          f' and use type {self.add_object}.')
-                    print('------------')
-                else:
-                    self.add_object = 0
-            elif self.add_object == 6:
-                if self.no_feat:
-                    # this is only used in stage one
-                    # attend the box feature with image feature first
                     self.groundingdino_feature_extractor = GroundingDinoFeature(num_queries=900, K=5)
                     self.box_feat_preprocess = DenseBlock(
                         768,
@@ -729,7 +596,7 @@ class MVT(nn.Module):
             self.layers.append(
                 nn.ModuleList([get_attn_attn(**cache_args), get_attn_ff(**cache_args)])
             )
-        if not self.pre_image_process in {9, 10, 11, 12}:
+        if not self.pre_image_process in {9, 10}:
             if cvx_up:
                 self.up0 = ConvexUpSample(
                     in_dim=self.input_dim_before_seq,
@@ -979,35 +846,29 @@ class MVT(nn.Module):
             processed_pos_emb = rearrange(processed_pos_emb, '(b n) d p1 p2->b d n p1 p2', b=bs, n=num_img)
             # (bs, im_channels, num_img, np, np)
             ins = ins+processed_pos_emb
-        elif self.pre_image_process in {9, 10, 12}:
+        elif self.pre_image_process in {9, 10}:
             # process rgb with grounding-dino, use loc info as position embedding
             with torch.no_grad():
                 rgb_views_image = rearrange(d0[:, 3:6, :, :], '(b nv) ... -> b nv ...', b=bs)
                 # (bs * num_img, 6, h, w)
                 pos_info = torch.cat((d0[:, 0:3, :, :], d0[:, 7:, :, :]), dim=1)
-                obj_caption = []
-                for lang in lang_goal:
-                    if lang[0].split()[-1] == 'cup':
-                        # stack cups
-                        if self.pre_image_process in {12}:
+                if self.pre_image_process == 9:
+                    obj_caption = []
+                    for lang in lang_goal:
+                        if lang[0].split()[-1] == 'cup':
+                            # stack cups
                             obj_caption.append('cups')
+                        elif lang[0].split()[-1] == 'spoke':
+                            # insert onto square peg
+                            obj_caption.append('spoke')
+                        elif lang[0].split()[3] == 'chess':
+                            # setup chess
+                            obj_caption.append('chess')
                         else:
-                            obj_caption.append(" ".join(lang[0].split()[-2:]))
-                    elif lang[0].split()[-1] == 'spoke':
-                        # insert onto square peg
-                        if self.pre_image_process in {9, 12}:
-                            obj_caption.append(" ".join(lang[0].split()[-2:]))
-                        elif self.pre_image_process == 10:
-                            obj_caption.append(" ".join(lang[0].split()[-2:])+" and the ring")
-                    elif lang[0].split()[3] == 'chess':
-                        # setup chess
-                        obj_caption.append(" ".join(lang[0].split()[2:5]))
-                    elif lang[0].split()[4] == 'chess':
-                        # setup chess
-                        obj_caption.append(" ".join(lang[0].split()[3:6]))
-                    else:
-                        raise ValueError('unsupported environment')
-                obj_caption = np.array(obj_caption).reshape(-1, 1)
+                            raise ValueError('unsupported environment')
+                    obj_caption = np.array(obj_caption).reshape(-1, 1)
+                elif self.pre_image_process == 10:
+                    obj_caption = lang_goal
                 # (bs * num_img, 1045, 256)
                 groundingdino_feat = self.groundingdino_feature_extractor(rgb_views_image, obj_caption)
             # (bs * num_img, 1045, im_channel)
@@ -1025,57 +886,6 @@ class MVT(nn.Module):
             # (bs * num_img, im_channel, 1045)
             ins += pos_emb_all
             # (bs, im_channel, num_img, 1045)
-            ins = rearrange(ins, '(b nv) c d -> b c nv d', b=bs)
-        elif self.pre_image_process == 11:
-            # process rgb with grounding-dino depth with dino-v2, use loc info as position embedding
-            with torch.no_grad():
-                rgb_views_image = rearrange(d0[:, 3:6, :, :], '(b nv) ... -> b nv ...', b=bs)
-                # (bs * num_img, 3, h, w)
-                depth_views_image = d0[:, 6:7, :, :].expand(-1, 3, -1, -1)
-
-                # (bs * num_img, 6, h, w)
-                pos_info = torch.cat((d0[:, 0:3, :, :], d0[:, 7:, :, :]), dim=1)
-                obj_caption = []
-                for lang in lang_goal:
-                    if lang[0].split()[-1] == 'cup':
-                        # stack cups
-                        obj_caption.append(" ".join(lang[0].split()[-2:]))
-                    elif lang[0].split()[-1] == 'spoke':
-                        # insert onto square peg
-                        obj_caption.append(" ".join(lang[0].split()[-2:]))
-                    elif lang[0].split()[3] == 'chess':
-                        # setup chess
-                        obj_caption.append(" ".join(lang[0].split()[2:5]))
-                    elif lang[0].split()[4] == 'chess':
-                        # setup chess
-                        obj_caption.append(" ".join(lang[0].split()[3:6]))
-                    else:
-                        raise ValueError('unsupported environment')
-                obj_caption = np.array(obj_caption).reshape(-1, 1)
-                # (bs * num_img, 1045, 256)
-                groundingdino_feat = self.groundingdino_feature_extractor(rgb_views_image, obj_caption)
-
-                # (bs * num_img, num_p*num_p, d)
-                processed_depth_patches = (self.pretrained_image_encoder.forward_features(
-                    depth_views_image))['x_norm_patchtokens']
-            # (bs * num_img, 1045, im_channel)
-            obj_feat = self.groundingdino_preprocess(groundingdino_feat)
-            # (bs * num_img, num_p*num_p, im_channel)
-            depth_feat = self.img_compress_fc(processed_depth_patches)
-            # (bs * num_img, im_channel, 1045+np*np)
-            ins = rearrange(torch.cat((obj_feat, depth_feat), dim=1), 'b p d -> b d p')
-
-            # (bs * num_img, img_channel, num_p, num_p)
-            pos_emb_all = []
-            for num_l in range(self.num_level):
-                pos_emb_all.append(self.patchify_layers[num_l](pos_info).reshape(bs*num_img, self.im_channels, -1))
-            pos_emb_all.append(self.patchify_layers[-1](pos_info).reshape(bs * num_img, self.im_channels, -1))
-            # (bs * num_img, im_channel, 1045+np*np)
-            pos_emb_all = torch.cat(pos_emb_all, dim=-1)
-
-            # (bs * num_img, im_channel, 1045+np*np)
-            ins += pos_emb_all
-            # (bs, im_channel, num_img, 1045+np*np)
             ins = rearrange(ins, '(b nv) c d -> b c nv d', b=bs)
         else:
             # (bs * num_img, im_channels, h, w) ->
@@ -1096,21 +906,17 @@ class MVT(nn.Module):
 
         # concat proprio
         if self.add_proprio:
-            if self.pre_image_process in {9, 10, 12}:
+            if self.pre_image_process in {9, 10}:
                 p = self.proprio_preprocess(proprio)  # [B,4] -> [B,64]
                 p = p.unsqueeze(-1).unsqueeze(-1).repeat(1, 1, num_img, 1045)
                 ins = torch.cat([ins, p], dim=1)  # [B, 128, num_img, 1045]
-            elif self.pre_image_process == 11:
-                p = self.proprio_preprocess(proprio)  # [B,4] -> [B,64]
-                p = p.unsqueeze(-1).unsqueeze(-1).repeat(1, 1, num_img, 1045+num_pat_img*num_pat_img)
-                ins = torch.cat([ins, p], dim=1)  # [B, 128, num_img, 1045+np*np]
             else:
                 _, _, _d, _h, _w = ins.shape
                 p = self.proprio_preprocess(proprio)  # [B,4] -> [B,64]
                 p = p.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).repeat(1, 1, _d, _h, _w)
                 ins = torch.cat([ins, p], dim=1)  # [B, 128, num_img, np, np]
 
-        if self.pre_image_process in {9, 10, 11, 12}:
+        if self.pre_image_process in {9, 10}:
             # channel last
             ins = rearrange(ins, "b d ... -> b ... d")  # [B, num_img, 1045, 128] or [B, num_img, 1045+np*np, 128]
 
@@ -1171,34 +977,31 @@ class MVT(nn.Module):
         # append object features as sequence
         if self.add_object > 0:
             rgb_views_image = rearrange(d0[:, 3:6, :, :], '(b nv) ... -> b nv ...', b=bs)
-            obj_caption = []
-            for lang in lang_goal:
-                if lang[0].split()[-1] == 'cup':
-                    # stack cups
-                    obj_caption.append(" ".join(lang[0].split()[-2:]))
-                elif lang[0].split()[-1] == 'spoke':
-                    # insert onto square peg
-                    if self.add_object == 7:
-                        obj_caption.append(" ".join(lang[0].split()[-2:]) + " and the ring")
+            if self.add_object == 7:
+                obj_caption = []
+                for lang in lang_goal:
+                    if lang[0].split()[-1] == 'cup':
+                        # stack cups
+                        obj_caption.append('cups')
+                    elif lang[0].split()[-1] == 'spoke':
+                        # insert onto square peg
+                        obj_caption.append('spoke')
+                    elif lang[0].split()[3] == 'chess':
+                        # setup chess
+                        obj_caption.append('chess')
                     else:
-                        obj_caption.append(" ".join(lang[0].split()[-2:]))
-                elif lang[0].split()[3] == 'chess':
-                    # setup chess
-                    obj_caption.append(" ".join(lang[0].split()[2:5]))
-                elif lang[0].split()[4] == 'chess':
-                    # setup chess
-                    obj_caption.append(" ".join(lang[0].split()[3:6]))
-                else:
-                    raise ValueError('unsupported environment')
-            obj_caption = np.array(obj_caption).reshape(-1, 1)
-            if self.add_object in {1, 2, 7}:
+                        raise ValueError('unsupported environment')
+                obj_caption = np.array(obj_caption).reshape(-1, 1)
+            else:
+                obj_caption = lang_goal
+            if self.add_object in {1, 7}:
                 # [b*num_img, 1045, 256]
                 groundingdino_feat = self.groundingdino_feature_extractor(rgb_views_image, obj_caption)
                 # [b*num_img, 1045, self.img_channel*2]
                 obj_feat = self.groundingdino_preprocess(groundingdino_feat)
                 obj_feat = rearrange(obj_feat, '(b nv) p d -> b (nv p) d', b=bs)
                 ins = torch.cat((ins, obj_feat), dim=1)  # [B, num_img * np * np + 77 + 1045*3, 128]
-            elif self.add_object in {3, 4}:
+            elif self.add_object in {3}:
                 # [b*num_img, num_query, 256], [b*num_img, num_query, 4]
                 groundingdino_feat, groundingdino_pos = self.groundingdino_feature_extractor.\
                     forward_query(rgb_views_image, obj_caption)
@@ -1210,7 +1013,7 @@ class MVT(nn.Module):
 
                 obj_feat = rearrange(obj_feat, '(b nv) p d -> b (nv p) d', b=bs)
                 ins = torch.cat((ins, obj_feat), dim=1)  # [B, num_img * np * np + 77 + num_img*num_query, 128]
-            elif self.add_object in {5, 6}:
+            elif self.add_object in {5}:
                 rgb_views_image = rearrange(d0[:, 3:6, :, :], '(b nv) ... -> b nv ...', b=bs)
                 # currently, we only consider stack cups and insert onto square peg
                 assert lang_goal[0, 0].split()[-1] == 'cup' or lang_goal[0, 0].split()[-1] == 'spoke'
@@ -1260,15 +1063,6 @@ class MVT(nn.Module):
         elif self.self_cross_ver == 2:
             assert self.pre_image_process > 0
             # cross attention
-            if self.add_object in {2, 4, 6}:
-                # attn image feature with object feature first
-                img_obj_x = x[:, num_lang_tok:]
-                lang_x = x[:, :num_lang_tok]
-                for self_attn, self_ff in self.layers[:len(self.layers) // 2]:
-                    img_obj_x = self_attn(img_obj_x) + img_obj_x
-                    img_obj_x = self_ff(img_obj_x) + img_obj_x
-                img_x = img_obj_x[:, :num_img*num_pat_img*num_pat_img]
-                x = torch.cat((lang_x, img_x), dim=1)
             for self_attn, self_ff in self.layers[len(self.layers) // 2:]:
                 x = self_attn(x) + x
                 x = self_ff(x) + x
@@ -1297,7 +1091,7 @@ class MVT(nn.Module):
         x = self.fc_aft_attn(x)
 
         # reshape back to original size
-        if self.pre_image_process in {9, 10, 11, 12}:
+        if self.pre_image_process in {9, 10}:
             x = x.view(bs, *ins_orig_shape[1:-1], x.shape[-1])  # [B, num_img, 1045, 128] or [B, num_img, 1045+np*np, 128]
             x = rearrange(x, "b ... d -> b d ...")  # [B, 128, num_img, 1045] or [B, 128, num_img, 1045+np*np]
         else:
@@ -1310,7 +1104,7 @@ class MVT(nn.Module):
             _feat = _feat.view(bs, -1)
             feat.append(_feat)
 
-        if self.pre_image_process in {9, 10, 11, 12}:
+        if self.pre_image_process in {9, 10}:
             x = (
                 x.transpose(1, 2)
                 .clone()
@@ -1327,11 +1121,6 @@ class MVT(nn.Module):
                 x_level = x[:, :, patch_ind[num_l]:patch_ind[num_l+1]]
                 x_level = rearrange(x_level, 'b d (p1 p2) -> b d p1 p2', p1=self.num_patch_per_level[num_l])
                 trans_level = self.ups[num_l](x_level)
-                trans_list.append(trans_level.view(bs, self.num_img, h, w))
-            if self.pre_image_process == 11:
-                x_level = x[:, :, patch_ind[num_l+1]:]
-                x_level = rearrange(x_level, 'b d (p1 p2) -> b d p1 p2', p1=num_pat_img)
-                trans_level = self.ups[-1](x_level)
                 trans_list.append(trans_level.view(bs, self.num_img, h, w))
             trans_list = torch.stack(trans_list)
             trans = torch.mean(trans_list, dim=0)

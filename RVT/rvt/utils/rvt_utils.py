@@ -268,6 +268,7 @@ COLOSSEUM_RLBENCH_TASKS = [
     "place_wine_at_rack_location",
     "insert_onto_square_peg",
     "stack_cups",
+    "stack_four_cups",
     "turn_oven_on",
     "straighten_rope",
     "setup_chess",

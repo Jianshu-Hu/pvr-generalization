@@ -232,9 +232,16 @@ def eval(
     arm_action_mode = EndEffectorPoseViaPlanning()
     action_mode = MoveArmThenGripper(arm_action_mode, gripper_mode)
 
+    # RLBench tasks
+    # task_files = [
+    #     t.replace(".py", "")
+    #     for t in os.listdir(rlbench_task.TASKS_PATH)
+    #     if t != "__init__.py" and t.endswith(".py")
+    # ]
+    # Colosseum tasks
     task_files = [
         t.replace(".py", "")
-        for t in os.listdir(rlbench_task.TASKS_PATH)
+        for t in os.listdir(TASKS_PY_FOLDER)
         if t != "__init__.py" and t.endswith(".py")
     ]
 
