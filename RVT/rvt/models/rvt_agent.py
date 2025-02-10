@@ -862,9 +862,16 @@ class RVTAgent:
                 # ]
 
                 if step == 0:
-                    self.step_description_list = self.image_analyzer.analyze_single_image(
-                        observation['front_rgb'].cpu().numpy()[0, 0],
-                        lang_goal=lang_goal)
+                    max_attempt = 10
+                    for _ in range(max_attempt):
+                        self.step_description_list = self.image_analyzer.analyze_single_image(
+                            observation['front_rgb'].cpu().numpy()[0, 0],
+                            lang_goal=lang_goal)
+                        if len(self.step_description_list) > 0:
+                            break
+                    if len(self.step_description_list) == 0:
+                        raise ValueError('The answer from llama is not as expected. '
+                                         'Exceed the max number of attempt')
 
                 # step_description = input("Choose the action to continue: ")
                 # print(f'use step language instruction: {step_description}')
