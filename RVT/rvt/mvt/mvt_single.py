@@ -537,7 +537,7 @@ class MVT(nn.Module):
                 print(f'use per-step language instruction to help improve the generalization across tasks,'
                       f' and use type {self.step_lang_type}.')
                 print('------------')
-            elif self.step_lang_type == 44:
+            elif self.step_lang_type in {44, 45, 46}:
                 # use the low-level language instruction
                 print('------------')
                 print(f'use per-step language instruction to help improve the generalization across tasks,'
@@ -976,7 +976,7 @@ class MVT(nn.Module):
                     step_lang_target = l.clone().detach()
                 else:
                     l = step_tokens_embs.clone().detach()
-            elif self.step_lang_type in {44}:
+            elif self.step_lang_type in {44, 45, 46}:
                 l = self.lang_preprocess(
                     step_tokens_embs.view(bs * self.lang_max_seq_len, self.lang_emb_dim)
                 )

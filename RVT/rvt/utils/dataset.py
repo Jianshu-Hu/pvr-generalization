@@ -425,7 +425,7 @@ def fill_replay(
                 print('save keypoint index to ' + str(keypoint_path))
             if not os.path.exists(lang_goal_path):
                 print('save language instruction to ' + str(lang_goal_path))
-                np.save(lang_goal_path, np.array([descs[0]]))
+                np.save(lang_goal_path, np.array([descs]))
 
             # Specify the path to the JSON file
             file_path = os.path.join(data_path, EPISODE_FOLDER % d_idx, 'keypoint_response.json')

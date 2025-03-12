@@ -30,7 +30,7 @@ from yarr.agents.agent import ActResult
 from rvt.utils.dataset import _clip_encode_text
 from rvt.utils.lr_sched_utils import GradualWarmupScheduler
 
-from rvt.models.llama_image_analyzer import ImageAnalyzer
+from rvt.models.image_analyzer import ImageAnalyzer
 
 
 def eval_con(gt, pred):
@@ -408,16 +408,16 @@ class RVTAgent:
         self.clip_model, self.clip_preprocess = clip.load("RN50", device=self._device)
         self.clip_model.eval()
 
-        # load llama
-        if self._network.mvt1.step_lang_type in {44}:
+        # load image_analyzer
+        if self._network.mvt1.step_lang_type in {44, 45, 46}:
             self.image_analyzer = ImageAnalyzer()
 
     def unload_clip(self):
         del self.clip_model
         del self.clip_preprocess
 
-        # unload llama
-        if self._network.mvt1.step_lang_type in {44}:
+        # unload image_analyzer
+        if self._network.mvt1.step_lang_type in {44, 45, 46}:
             del self.image_analyzer
 
         with torch.cuda.device(self._device):
@@ -838,50 +838,143 @@ class RVTAgent:
             lang_goal_embs = lang_goal_embs.float()
             lang_goal = lang_goal
 
-            if self._network.mvt1.step_lang_type in {44}:
+            if self._network.mvt1.step_lang_type in {44, 45, 46}:
                 if not hasattr(self, 'counter'):
                     self.counter = 0
                 else:
                     self.counter += 1
-                # np.save(f'img_front_rgb_{self.counter}.npy', observation['front_rgb'].cpu().numpy()[0, 0])
-                # print(f'save to img_front_rgb_{self.counter}.npy')
+                np.save(f'img_front_rgb_{self.counter}.npy', observation['front_rgb'].cpu().numpy()[0, 0])
+                print(f'save to img_front_rgb_{self.counter}.npy')
+                response= self.image_analyzer.infer_stream(
+                        img=observation['front_rgb'].cpu().numpy()[0, 0],
+                        lang_goal=lang_goal)
+                print(response)
+                step_desc_tokens = clip.tokenize([response])
 
-                # step_description_list = [
-                #     'The robot arm begins to descend, angling itself towards the chess piece on the board.',
-                #     'The robot arm extends its gripper and successfully engages with the chess piece.',
-                #     'The robot arm lifts the chess piece upward, moving it away from the board.',
-                #     'The robot arm transitions horizontally, carrying the chess piece towards its designated initial position on the board.',
-                #     'The robot arm lowers the chess piece into place and releases it, completing the task of placing the piece on the board.'
-                # ]
-                # step_description_list = [
-                #     "The robot arm moves downwards, positioning itself closer to the ring on the table.",
-                #     "The robot arm extends its grip to securely grasp the ring.",
-                #     "The robot arm lifts the ring off the table, preparing to move it.",
-                #     "The robot arm rotates slightly while moving to align the ring with the red spoke.",
-                #     "The robot arm moves downwards and releases the ring onto the red spoke."
-                # ]
+                # # fixed sub-steps
+                # if step == 0:
+                #     # test stack cups
+                #     colors = [lang_goal.split()[2], lang_goal.split()[6], lang_goal.split()[-2]]
+                #     # test stack 4 cups
+                #     # colors = [lang_goal.split()[2], lang_goal.split()[6], lang_goal.split()[10], lang_goal.split()[-2]]
+                #     print(colors)
+                #     # self.step_description_list = ['test'] * 10
+                #
+                #     if self._network.mvt1.step_lang_type == 44:
+                #         # lang level 1
+                #         self.step_description_list =\
+                #             [f"The robot arm begins its downward movement, positioning itself to grasp the {colors[0]} cup.",
+                #              f"The robot arm's gripper grasps the {colors[0]} cup firmly.",
+                #              f"The arm lifts the {colors[0]} cup above the table.",
+                #              f"The robot arm shifts the {colors[0]} cup, aligning it above the {colors[2]} cup.",
+                #              f"The arm lowers the {colors[0]} cup, releasing it to stack perfectly on top.",
+                #              f"The robot arm retracts and adjusts its position, preparing to grab the {colors[1]} cup.",
+                #              f"The robot arm approaches and grasps the {colors[1]} cup with its gripper.",
+                #              f"The arm lifts the {colors[1]} cup away from the surface.",
+                #              f"The robot arm aligns the {colors[1]} cup above the {colors[2]} cups.",
+                #              f"The arm lowers the {colors[1]} cup onto the stack, releasing it and completing the stacking task."]
+                #         # self.step_description_list =\
+                #         #     [f"The robot arm begins its downward movement, positioning itself to grasp the {colors[0]} cup.",
+                #         #      f"The robot arm's gripper grasps the {colors[0]} cup firmly.",
+                #         #      f"The arm lifts the {colors[0]} cup above the table.",
+                #         #      f"The robot arm shifts the {colors[0]} cup, aligning it above the {colors[3]} cup.",
+                #         #      f"The arm lowers the {colors[0]} cup, releasing it to stack perfectly on top.",
+                #         #      f"The robot arm retracts and adjusts its position, preparing to grab the {colors[1]} cup.",
+                #         #      f"The robot arm approaches and grasps the {colors[1]} cup with its gripper.",
+                #         #      f"The arm lifts the {colors[1]} cup away from the surface.",
+                #         #      f"The robot arm aligns the {colors[1]} cup above the {colors[3]} cups.",
+                #         #      f"The arm lowers the {colors[1]} cup onto the stack, releasing it to stack",
+                #         #      f"The robot arm retracts and adjusts its position, preparing to grab the {colors[2]} cup.",
+                #         #      f"The robot arm approaches and grasps the {colors[2]} cup with its gripper.",
+                #         #      f"The arm lifts the {colors[2]} cup away from the surface.",
+                #         #      f"The robot arm aligns the {colors[2]} cup above the {colors[3]} cups.",
+                #         #      f"The arm lowers the {colors[2]} cup onto the stack, releasing it and completing the stacking task."
+                #         #      ]
+                #     elif self._network.mvt1.step_lang_type == 45:
+                #         # lang level 2
+                #         self.step_description_list =\
+                #             [f"The robot arm grasps the {colors[0]} cup.",
+                #              f"The robot arm grasps the {colors[0]} cup.",
+                #              f"The arm stack the {colors[0]} cup onto the {colors[2]} cup.",
+                #              f"The arm stack the {colors[0]} cup onto the {colors[2]} cup.",
+                #              f"The arm stack the {colors[0]} cup onto the {colors[2]} cup.",
+                #              f"The robot arm grasps the {colors[1]} cup.",
+                #              f"The robot arm grasps the {colors[1]} cup.",
+                #              f"The arm stack the {colors[1]} cup onto the {colors[2]} cup.",
+                #              f"The arm stack the {colors[1]} cup onto the {colors[2]} cup.",
+                #              f"The arm stack the {colors[1]} cup onto the {colors[2]} cup."]
+                #         # self.step_description_list =\
+                #         #     [f"The robot arm grasps the {colors[0]} cup.",
+                #         #      f"The robot arm grasps the {colors[0]} cup.",
+                #         #      f"The arm stack the {colors[0]} cup onto the {colors[3]} cup.",
+                #         #      f"The arm stack the {colors[0]} cup onto the {colors[3]} cup.",
+                #         #      f"The arm stack the {colors[0]} cup onto the {colors[3]} cup.",
+                #         #      f"The robot arm grasps the {colors[1]} cup.",
+                #         #      f"The robot arm grasps the {colors[1]} cup.",
+                #         #      f"The arm stack the {colors[1]} cup onto the {colors[3]} cup.",
+                #         #      f"The arm stack the {colors[1]} cup onto the {colors[3]} cup.",
+                #         #      f"The arm stack the {colors[1]} cup onto the {colors[3]} cup.",
+                #         #      f"The robot arm grasps the {colors[2]} cup.",
+                #         #      f"The robot arm grasps the {colors[2]} cup.",
+                #         #      f"The arm stack the {colors[2]} cup onto the {colors[3]} cup.",
+                #         #      f"The arm stack the {colors[2]} cup onto the {colors[3]} cup.",
+                #         #      f"The arm stack the {colors[2]} cup onto the {colors[3]} cup."
+                #         #      ]
+                #     elif self._network.mvt1.step_lang_type == 46:
+                #         # lang level 3
+                #         self.step_description_list =\
+                #             [f"The arm stack the {colors[0]} cup onto the {colors[2]} cup.",
+                #              f"The arm stack the {colors[0]} cup onto the {colors[2]} cup.",
+                #              f"The arm stack the {colors[0]} cup onto the {colors[2]} cup.",
+                #              f"The arm stack the {colors[0]} cup onto the {colors[2]} cup.",
+                #              f"The arm stack the {colors[0]} cup onto the {colors[2]} cup.",
+                #              f"The arm stack the {colors[1]} cup onto the {colors[2]} cup.",
+                #              f"The arm stack the {colors[1]} cup onto the {colors[2]} cup.",
+                #              f"The arm stack the {colors[1]} cup onto the {colors[2]} cup.",
+                #              f"The arm stack the {colors[1]} cup onto the {colors[2]} cup.",
+                #              f"The arm stack the {colors[1]} cup onto the {colors[2]} cup."]
+                #         # self.step_description_list =\
+                #         #     [f"The arm stack the {colors[0]} cup onto the {colors[3]} cup.",
+                #         #      f"The arm stack the {colors[0]} cup onto the {colors[3]} cup.",
+                #         #      f"The arm stack the {colors[0]} cup onto the {colors[3]} cup.",
+                #         #      f"The arm stack the {colors[0]} cup onto the {colors[3]} cup.",
+                #         #      f"The arm stack the {colors[0]} cup onto the {colors[3]} cup.",
+                #         #      f"The arm stack the {colors[1]} cup onto the {colors[3]} cup.",
+                #         #      f"The arm stack the {colors[1]} cup onto the {colors[3]} cup.",
+                #         #      f"The arm stack the {colors[1]} cup onto the {colors[3]} cup.",
+                #         #      f"The arm stack the {colors[1]} cup onto the {colors[3]} cup.",
+                #         #      f"The arm stack the {colors[1]} cup onto the {colors[3]} cup.",
+                #         #      f"The arm stack the {colors[2]} cup onto the {colors[3]} cup.",
+                #         #      f"The arm stack the {colors[2]} cup onto the {colors[3]} cup.",
+                #         #      f"The arm stack the {colors[2]} cup onto the {colors[3]} cup.",
+                #         #      f"The arm stack the {colors[2]} cup onto the {colors[3]} cup.",
+                #         #      f"The arm stack the {colors[2]} cup onto the {colors[3]} cup."
+                #         #      ]
+                #     else:
+                #         raise ValueError('not implemented')
+                #     # max_attempt = 10
+                #     # for _ in range(max_attempt):
+                #     #     self.step_description_list = self.image_analyzer.analyze_single_image(
+                #     #         observation['front_rgb'].cpu().numpy()[0, 0],
+                #     #         lang_goal=lang_goal)
+                #     #     if len(self.step_description_list) > 0:
+                #     #         break
+                #     # if len(self.step_description_list) == 0:
+                #     #     raise ValueError('The answer from llama is not as expected. '
+                #     #                      'Exceed the max number of attempt')
+                #
+                # # target_color = lang_goal.split()[-2]
+                # # lang_goal = f'stack the other cups on top of the {target_color} cup'
+                # # step_description = input("Choose the action to continue: ")
+                # # print(f'use step language instruction: {step_description}')
+                # print(self.step_description_list[step % len(self.step_description_list)])
+                # step_desc_tokens = clip.tokenize([self.step_description_list[step % len(self.step_description_list)]])
 
-                if step == 0:
-                    max_attempt = 10
-                    for _ in range(max_attempt):
-                        self.step_description_list = self.image_analyzer.analyze_single_image(
-                            observation['front_rgb'].cpu().numpy()[0, 0],
-                            lang_goal=lang_goal)
-                        if len(self.step_description_list) > 0:
-                            break
-                    if len(self.step_description_list) == 0:
-                        raise ValueError('The answer from llama is not as expected. '
-                                         'Exceed the max number of attempt')
-
-                # step_description = input("Choose the action to continue: ")
-                # print(f'use step language instruction: {step_description}')
-                print(self.step_description_list[step % len(self.step_description_list)])
-                step_desc_tokens = clip.tokenize([self.step_description_list[step % len(self.step_description_list)]])
                 step_desc_tokens_tensor = step_desc_tokens.to(self._device)
 
                 with torch.no_grad():
                     _, step_tokens_embs = _clip_encode_text(self.clip_model, step_desc_tokens_tensor)
-                step_tokens_embs = step_tokens_embs[0].float()
+                step_tokens_embs = step_tokens_embs.float()
             else:
                 step_tokens_embs = None
         else:
