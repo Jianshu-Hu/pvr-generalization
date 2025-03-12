@@ -134,8 +134,7 @@ class MVT(nn.Module):
 
         :param pre_image_process: use a pretrained image encoder to preprocess the RGB images
             from different views
-        :param step_lang_type: label the action per step with a specific language instruction and align the action with
-            this language instruction for generalization across different tasks
+        :param step_lang_type: label the action per step with a specific language instruction
         :param add_obj: add object-centric feature for better localizing the language-aligned objects in the scene
         """
 
@@ -477,67 +476,9 @@ class MVT(nn.Module):
                     self.add_object = 0
 
         if self.step_lang_type > 0:
-            if self.step_lang_type == 41:
-                # in first stage, the agent predict the low-level language instruction
-                # in second stage, use the predicted instruction to train
-                if self.no_feat:
-                    self.step_lang_pred_layer = nn.Sequential(
-                        DenseBlock(
-                            attn_dim,
-                            lang_emb_dim,
-                            norm=None,
-                            activation=None,),
-                        DenseBlock(
-                            lang_emb_dim,
-                            lang_emb_dim,
-                            norm=None,
-                            activation=None,)
-                    )
-                print('------------')
-                print(f'use per-step language instruction to help improve the generalization across tasks,'
-                      f' and use type {self.step_lang_type}.')
-                print('------------')
-            elif self.step_lang_type == 42:
-                # in first stage, the agent predict the low-level language instruction
-                # in second stage, use the ground-truth to train and use the prediction to eval
-                if self.no_feat:
-                    self.step_lang_pred_layer = nn.Sequential(
-                        DenseBlock(
-                            attn_dim,
-                            lang_emb_dim,
-                            norm=None,
-                            activation=None,),
-                        DenseBlock(
-                            lang_emb_dim,
-                            lang_emb_dim,
-                            norm=None,
-                            activation=None,)
-                    )
-                print('------------')
-                print(f'use per-step language instruction to help improve the generalization across tasks,'
-                      f' and use type {self.step_lang_type}.')
-                print('------------')
-            elif self.step_lang_type == 43:
-                # in first stage, the agent predict the low-level language instruction
-                # in second stage, use the ground-truth to train and use the prediction to eval
-                if self.no_feat:
-                    self.step_lang_pred_layer = nn.Sequential(
-                        DenseBlock(
-                            attn_dim,
-                            lang_emb_dim,
-                            norm=None,
-                            activation=None,),
-                        DenseBlock(
-                            lang_emb_dim,
-                            self.im_channels*2,
-                            norm=None,
-                            activation=None,)
-                    )
-                print('------------')
-                print(f'use per-step language instruction to help improve the generalization across tasks,'
-                      f' and use type {self.step_lang_type}.')
-                print('------------')
-            elif self.step_lang_type in {44, 45, 46}:
+            if not self.step_lang_type in {44, 45, 46}:
+                raise ValueError('not implemented')
+            else:
                 # use the low-level language instruction
                 print('------------')
                 print(f'use per-step language instruction to help improve the generalization across tasks,'
@@ -955,28 +896,10 @@ class MVT(nn.Module):
         if self.pe_fix:
             ins += self.pos_encoding
 
-        if self.step_lang_type >= 0:
-            step_lang_prediction = None
-            step_lang_target = None
-
         # append language features as sequence
         num_lang_tok = 0
         if self.add_lang:
-            if self.step_lang_type in {41, 42} and not self.no_feat:
-                # in second stage, use the prediction to train and eval
-                l = self.lang_preprocess(
-                    step_tokens_embs.clone().detach().view(bs * self.lang_max_seq_len, self.lang_emb_dim)
-                )
-            elif self.step_lang_type in {43} and not self.no_feat:
-                # in second stage, use the prediction to train and eval
-                if self.training:
-                    l = self.lang_preprocess(
-                        step_tokens_embs.clone().detach().view(bs * self.lang_max_seq_len, self.lang_emb_dim)
-                    )
-                    step_lang_target = l.clone().detach()
-                else:
-                    l = step_tokens_embs.clone().detach()
-            elif self.step_lang_type in {44, 45, 46}:
+            if self.step_lang_type in {44, 45, 46}:
                 l = self.lang_preprocess(
                     step_tokens_embs.view(bs * self.lang_max_seq_len, self.lang_emb_dim)
                 )
@@ -1083,17 +1006,6 @@ class MVT(nn.Module):
                 x = self_ff(x) + x
         else:
             assert False
-
-        if self.step_lang_type in {41, 42} and self.no_feat:
-            # in first stage, predict the low-level language instruction
-            x_lang = x[:, :num_lang_tok]
-            step_lang_prediction = self.step_lang_pred_layer(x_lang.reshape(bs*num_lang_tok, -1))
-            if self.training:
-                step_lang_target = step_tokens_embs.view(bs * self.lang_max_seq_len, self.lang_emb_dim)
-        if self.step_lang_type in {43} and self.no_feat:
-            # in first stage, predict the low-level language instruction
-            x_lang = x[:, :num_lang_tok]
-            step_lang_prediction = self.step_lang_pred_layer(x_lang.reshape(bs*num_lang_tok, -1))
 
         # append language features as sequence
         if self.add_lang:
@@ -1273,8 +1185,6 @@ class MVT(nn.Module):
             out = {}
 
         out.update({"trans": trans})
-        out.update({"step_lang_prediction": step_lang_prediction})
-        out.update({"step_lang_target": step_lang_target})
 
         return out
 
