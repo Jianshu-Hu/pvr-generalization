@@ -695,6 +695,14 @@ class RVTAgent:
             action_trans = self.get_action_trans(
                 wpt_local, pts, out, dyn_cam_info, dims=(bs, nc, h, w)
             )
+            # # visualize the training data
+            # if not hasattr(self, 'counter'):
+            #     self.counter = 0
+            # else:
+            #     self.counter += 1
+            # print(f'{self.counter}: {step_lang_goal}')
+            # np.save(f'keypoint_{self.counter}.npy', action_trans.cpu().numpy())
+            # print(f'keypoint saved to to keypoint_{self.counter}.npy')
 
         loss_log = {}
         if backprop:
@@ -824,10 +832,10 @@ class RVTAgent:
             lang_goal = lang_goal
 
             if self._network.mvt1.step_lang_type in {44, 45, 46}:
-                if not hasattr(self, 'counter'):
-                    self.counter = 0
-                else:
-                    self.counter += 1
+                # if not hasattr(self, 'counter'):
+                #     self.counter = 0
+                # else:
+                #     self.counter += 1
                 # np.save(f'img_front_rgb_{self.counter}.npy', observation['front_rgb'].cpu().numpy()[0, 0])
                 # print(f'save to img_front_rgb_{self.counter}.npy')
                 response= self.image_analyzer.infer_stream(

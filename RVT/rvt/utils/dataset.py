@@ -251,9 +251,9 @@ def _add_keypoints_to_replay(
     crop_augmentation: bool,
     next_keypoint_idx: int,
     description: str = "",
-    step_description: str = "",
     clip_model=None,
     device="cpu",
+    step_descriptions: List[str] = ['']
 ):
     prev_action = None
     obs = inital_obs
@@ -294,7 +294,7 @@ def _add_keypoints_to_replay(
             lang_feats, lang_embs = _clip_encode_text(clip_model, token_tensor)
         obs_dict["lang_goal_embs"] = lang_embs[0].float().detach().cpu().numpy()
 
-        step_desc_tokens = clip.tokenize([step_description]).numpy()
+        step_desc_tokens = clip.tokenize([step_descriptions[k]]).numpy()
         step_desc_tokens_tensor = torch.from_numpy(step_desc_tokens).to(device)
 
         with torch.no_grad():
@@ -324,7 +324,7 @@ def _add_keypoints_to_replay(
             "rot_grip_action_indicies": rot_grip_indicies,
             "gripper_pose": obs_tp1.gripper_pose,
             "lang_goal": np.array([description], dtype=object),
-            "step_lang_goal": np.array([step_description], dtype=object),
+            "step_lang_goal": np.array([step_descriptions[k]], dtype=object),
         }
 
         others.update(final_obs)
@@ -451,7 +451,6 @@ def fill_replay(
 
                 obs = demo[i]
                 desc = descs[0]
-                step_desc = step_descs[next_keypoint_idx]
                 # if our starting point is past one of the keypoints, then remove it
                 while (
                     next_keypoint_idx < len(episode_keypoints)
@@ -476,9 +475,9 @@ def fill_replay(
                     crop_augmentation,
                     next_keypoint_idx=next_keypoint_idx,
                     description=desc,
-                    step_description=step_desc,
                     clip_model=clip_model,
                     device=device,
+                    step_descriptions=step_descs
                 )
 
         # save TERMINAL info in replay_info.npy

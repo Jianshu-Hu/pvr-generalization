@@ -477,6 +477,15 @@ class MVT(nn.Module):
                 # np.save(f'img_after_crop_{self.counter}.npy', img.detach().cpu().numpy()[:, :, 3:6, :, :])
                 # print(f'save to img_after_crop_{self.counter}.npy')
 
+        # # visualize the training data
+        # if not hasattr(self, 'counter'):
+        #     self.counter = 0
+        # else:
+        #     self.counter += 1
+        # print(f'{self.counter}: {step_lang_goal}')
+        # np.save(f'img_front_rgb_{self.counter}.npy', img.detach().cpu().numpy()[:, :, 3:6, :, :])
+        # print(f'current obs saved to to img_front_rgb_{self.counter}.npy')
+
         if self.training:
             wpt_local_stage_one = wpt_local
             wpt_local_stage_one = wpt_local_stage_one.clone().detach()
