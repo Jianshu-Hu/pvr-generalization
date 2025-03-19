@@ -476,7 +476,7 @@ class MVT(nn.Module):
                     self.add_object = 0
 
         if self.step_lang_type > 0:
-            if not self.step_lang_type in {44, 45, 46}:
+            if not self.step_lang_type in {44, 45, 46, 47}:
                 raise ValueError('not implemented')
             else:
                 # use the low-level language instruction

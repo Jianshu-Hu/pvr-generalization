@@ -409,15 +409,20 @@ class RVTAgent:
         self.clip_model.eval()
 
         # load image_analyzer
-        if self._network.mvt1.step_lang_type in {44, 45, 46}:
-            self.image_analyzer = ImageAnalyzer()
+        if self._network.mvt1.step_lang_type in {44, 45, 46, 47}:
+            if self._network.mvt1.step_lang_type == 44:
+                self.image_analyzer = ImageAnalyzer('random_pos_lang_level_1_episodes_100_checkpoint-1770')
+            elif self._network.mvt1.step_lang_type == 45:
+                self.image_analyzer = ImageAnalyzer('random_pos_lang_level_2_episodes_100_checkpoint-1770')
+            elif self._network.mvt1.step_lang_type == 47:
+                self.image_analyzer = ImageAnalyzer('random_pos_lang_level_5_episodes_100_checkpoint-1770')
 
     def unload_clip(self):
         del self.clip_model
         del self.clip_preprocess
 
         # unload image_analyzer
-        if self._network.mvt1.step_lang_type in {44, 45, 46}:
+        if self._network.mvt1.step_lang_type in {44, 45, 46, 47}:
             del self.image_analyzer
 
         with torch.cuda.device(self._device):
@@ -831,13 +836,8 @@ class RVTAgent:
             lang_goal_embs = lang_goal_embs.float()
             lang_goal = lang_goal
 
-            if self._network.mvt1.step_lang_type in {44, 45, 46}:
-                # if not hasattr(self, 'counter'):
-                #     self.counter = 0
-                # else:
-                #     self.counter += 1
-                # np.save(f'img_front_rgb_{self.counter}.npy', observation['front_rgb'].cpu().numpy()[0, 0])
-                # print(f'save to img_front_rgb_{self.counter}.npy')
+            if self._network.mvt1.step_lang_type in {44, 45, 46, 47}:
+
                 response= self.image_analyzer.infer_stream(
                         img=observation['front_rgb'].cpu().numpy()[0, 0],
                         lang_goal=lang_goal)
@@ -902,6 +902,18 @@ class RVTAgent:
         _, rot_q, grip_q, collision_q, y_q, _ = self.get_q(
             out, dims=(bs, nc, h, w), only_pred=True, get_q_trans=False
         )
+        # # visualize the eval results
+        # q_trans, rot_q, grip_q, collision_q, y_q, _ = self.get_q(
+        #     out, dims=(bs, nc, h, w), only_pred=True, get_q_trans=True
+        # )
+        # if not hasattr(self, 'counter'):
+        #     self.counter = 0
+        # else:
+        #     self.counter += 1
+        # print(f'{self.counter}: {response}')
+        # np.save(f'keypoint_{self.counter}.npy', q_trans.cpu().numpy())
+        # print(f'keypoint saved to to keypoint_{self.counter}.npy')
+
         pred_wpt, pred_rot_quat, pred_grip, pred_coll = self.get_pred(
             out, rot_q, grip_q, collision_q, y_q, rev_trans, dyn_cam_info
         )

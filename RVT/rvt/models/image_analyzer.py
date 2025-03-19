@@ -20,11 +20,10 @@ from swift.utils import get_model_parameter_info, get_logger, seed_everything
 
 
 class ImageAnalyzer():
-    def __init__(self):
+    def __init__(self, model_ckpt):
         # model
         # TODO:change the directory here
-        last_model_checkpoint = '/bd_byta6000i0/users/jhu/VLM-finetune/saved_ckpts/random_pos_episodes_100_checkpoint-1770'
-        self.output_dir = last_model_checkpoint + 'eval_results'
+        last_model_checkpoint = '/bd_byta6000i0/users/jhu/VLM-finetune/saved_ckpts/'+model_ckpt
         model_id_or_path = 'Qwen/Qwen2.5-VL-3B-Instruct'
 
         # generation_config
