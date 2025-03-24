@@ -411,8 +411,10 @@ class RVTAgent:
         # load image_analyzer
         if self._network.mvt1.step_lang_type in {44, 45, 46, 47}:
             if self._network.mvt1.step_lang_type == 44:
+                # self.image_analyzer = ImageAnalyzer('fewer_colors_switched_pos_lang_level_1_episodes_100_checkpoint-1755')
                 self.image_analyzer = ImageAnalyzer('random_pos_lang_level_1_episodes_100_checkpoint-1770')
             elif self._network.mvt1.step_lang_type == 45:
+                # self.image_analyzer = ImageAnalyzer('fewer_colors_switched_pos_lang_level_2_episodes_100_checkpoint-1755')
                 self.image_analyzer = ImageAnalyzer('random_pos_lang_level_2_episodes_100_checkpoint-1770')
             elif self._network.mvt1.step_lang_type == 47:
                 self.image_analyzer = ImageAnalyzer('random_pos_lang_level_5_episodes_100_checkpoint-1770')
@@ -837,11 +839,78 @@ class RVTAgent:
             lang_goal = lang_goal
 
             if self._network.mvt1.step_lang_type in {44, 45, 46, 47}:
+                print(lang_goal)
 
-                response= self.image_analyzer.infer_stream(
-                        img=observation['front_rgb'].cpu().numpy()[0, 0],
-                        lang_goal=lang_goal)
+                # np.save(f'current_obs.npy', observation['front_rgb'].cpu().numpy())
+                # response = input('please write step language instruction')
+
+                # colors = [lang_goal.split()[2], lang_goal.split()[6], lang_goal.split()[10], lang_goal.split()[-2]]
+                # if self._network.mvt1.step_lang_type == 44:
+                #     lang_instruct = [
+                #         f"The robot arm begins its downward movement, positioning itself to grasp the {colors[0]} cup.",
+                #         f"The robot arm's gripper grasps the {colors[0]} cup firmly.",
+                #         f"The arm lifts the {colors[0]} cup above the table.",
+                #         f"The robot arm shifts the {colors[0]} cup, aligning it above the {colors[3]} cup.",
+                #         f"The arm lowers the {colors[0]} cup, releasing it to stack perfectly on top.",
+                #         f"The robot arm retracts and adjusts its position, preparing to grab the {colors[1]} cup.",
+                #         f"The robot arm approaches and grasps the {colors[1]} cup with its gripper.",
+                #         f"The arm lifts the {colors[1]} cup away from the surface.",
+                #         f"The robot arm aligns the {colors[1]} cup above the {colors[3]} cups.",
+                #         f"The arm lowers the {colors[1]} cup, releasing it to stack perfectly on top.",
+                #         f"The robot arm retracts and adjusts its position, preparing to grab the {colors[2]} cup.",
+                #         f"The robot arm approaches and grasps the {colors[2]} cup with its gripper.",
+                #         f"The arm lifts the {colors[2]} cup away from the surface.",
+                #         f"The robot arm aligns the {colors[2]} cup above the {colors[3]} cups.",
+                #         f"The arm lowers the {colors[2]} cup onto the stack, releasing it and completing the stacking task."
+                #     ]
+                # elif self._network.mvt1.step_lang_type == 45:
+                #     lang_instruct = [f"The robot arm grasps the {colors[0]} cup.",
+                #                      f"The robot arm grasps the {colors[0]} cup.",
+                #                      f"The arm stack the {colors[0]} cup onto the {colors[3]} cup.",
+                #                      f"The arm stack the {colors[0]} cup onto the {colors[3]} cup.",
+                #                      f"The arm stack the {colors[0]} cup onto the {colors[3]} cup.",
+                #                      f"The robot arm grasps the {colors[1]} cup.",
+                #                      f"The robot arm grasps the {colors[1]} cup.",
+                #                      f"The arm stack the {colors[1]} cup onto the {colors[3]} cup.",
+                #                      f"The arm stack the {colors[1]} cup onto the {colors[3]} cup.",
+                #                      f"The arm stack the {colors[1]} cup onto the {colors[3]} cup.",
+                #                      f"The robot arm grasps the {colors[2]} cup.",
+                #                      f"The robot arm grasps the {colors[2]} cup.",
+                #                      f"The arm stack the {colors[2]} cup onto the {colors[3]} cup.",
+                #                      f"The arm stack the {colors[2]} cup onto the {colors[3]} cup.",
+                #                      f"The arm stack the {colors[2]} cup onto the {colors[3]} cup."
+                #                      ]
+                colors = [lang_goal.split()[2], lang_goal.split()[6], lang_goal.split()[-2]]
+                if self._network.mvt1.step_lang_type == 44:
+                    lang_instruct = [
+                        f"The robot arm begins its downward movement, positioning itself to grasp the {colors[0]} cup.",
+                        f"The robot arm's gripper grasps the {colors[0]} cup firmly.",
+                        f"The arm lifts the {colors[0]} cup above the table.",
+                        f"The robot arm shifts the {colors[0]} cup, aligning it above the {colors[2]} cup.",
+                        f"The arm lowers the {colors[0]} cup, releasing it to stack perfectly on top.",
+                        f"The robot arm retracts and adjusts its position, preparing to grab the {colors[1]} cup.",
+                        f"The robot arm approaches and grasps the {colors[1]} cup with its gripper.",
+                        f"The arm lifts the {colors[1]} cup away from the surface.",
+                        f"The robot arm aligns the {colors[1]} cup above the {colors[2]} cups.",
+                        f"The arm lowers the {colors[1]} cup onto the stack, releasing it and completing the stacking task."]
+                elif self._network.mvt1.step_lang_type == 45:
+                    lang_instruct = [f"The robot arm grasps the {colors[0]} cup.",
+                                     f"The robot arm grasps the {colors[0]} cup.",
+                                     f"The arm stack the {colors[0]} cup onto the {colors[2]} cup.",
+                                     f"The arm stack the {colors[0]} cup onto the {colors[2]} cup.",
+                                     f"The arm stack the {colors[0]} cup onto the {colors[2]} cup.",
+                                     f"The robot arm grasps the {colors[1]} cup.",
+                                     f"The robot arm grasps the {colors[1]} cup.",
+                                     f"The arm stack the {colors[1]} cup onto the {colors[2]} cup.",
+                                     f"The arm stack the {colors[1]} cup onto the {colors[2]} cup.",
+                                     f"The arm stack the {colors[1]} cup onto the {colors[2]} cup."]
+                response = lang_instruct[step%len(lang_instruct)]
+
+                # response= self.image_analyzer.infer_stream(
+                #         img=observation['front_rgb'].cpu().numpy()[0, 0],
+                #         lang_goal=lang_goal)
                 print(response)
+                step_lang_goal = response
                 step_desc_tokens = clip.tokenize([response])
                 step_desc_tokens_tensor = step_desc_tokens.to(self._device)
 
@@ -849,6 +918,7 @@ class RVTAgent:
                     _, step_tokens_embs = _clip_encode_text(self.clip_model, step_desc_tokens_tensor)
                 step_tokens_embs = step_tokens_embs.float()
             else:
+                step_lang_goal = None
                 step_tokens_embs = None
         else:
             lang_goal_embs = (
@@ -857,6 +927,7 @@ class RVTAgent:
                 .to(self._device)
             )
             lang_goal = None
+            step_lang_goal = None
 
         proprio = arm_utils.stack_on_channel(observation["low_dim_state"])
 
@@ -888,6 +959,7 @@ class RVTAgent:
         h = w = self._net_mod.img_size
         dyn_cam_info = None
 
+
         out = self._network(
             pc=pc,
             img_feat=img_feat,
@@ -895,7 +967,7 @@ class RVTAgent:
             lang_emb=lang_goal_embs,
             step_single_embs=None,
             step_tokens_embs=step_tokens_embs,
-            step_lang_goal=None,
+            step_lang_goal=step_lang_goal,
             lang_goal=lang_goal,
             img_aug=0,  # no img augmentation while acting
         )

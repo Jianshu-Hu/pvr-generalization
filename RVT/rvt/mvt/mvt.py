@@ -18,6 +18,7 @@ from rvt.mvt.mvt_single import MVT as MVTSingle
 from rvt.mvt.config import get_cfg_defaults
 # from rvt.mvt.renderer import BoxRenderer
 from rvt.mvt.groundingdino_wrapper import GroundingDinoHeatMap
+from rvt.models.image_analyzer import KeypointPredictor
 
 
 class MVT(nn.Module):
@@ -492,18 +493,33 @@ class MVT(nn.Module):
         else:
             wpt_local_stage_one = wpt_local
 
-        out = self.mvt1(
-            img=img,
-            proprio=proprio,
-            lang_emb=lang_emb,
-            step_single_embs=step_single_embs,
-            step_tokens_embs=step_tokens_embs,
-            step_lang_goal=step_lang_goal,
-            lang_goal=lang_goal,
-            wpt_local=wpt_local_stage_one,
-            rot_x_y=rot_x_y,
-            **kwargs,
-        )
+        if self.mvt1.step_lang_type in {44, 45, 46, 47}:
+            if not hasattr(self, 'keypoint_predictor'):
+                if self.mvt1.step_lang_type == 44:
+                    self.keypoint_predictor = KeypointPredictor(
+                        'fewer_colors_switched_pos_keypoints_lang_level_1_episodes_100_checkpoint-1755')
+                    # self.keypoint_predictor = KeypointPredictor(
+                    #     'random_pos_keypoints_lang_level_1_episodes_100_checkpoint-1770')
+                elif self.mvt1.step_lang_type == 45:
+                    self.keypoint_predictor = KeypointPredictor(
+                        'fewer_colors_switched_pos_keypoints_lang_level_2_episodes_100_checkpoint-1755')
+                    # self.keypoint_predictor = KeypointPredictor(
+                    #     'random_pos_keypoints_lang_level_2_episodes_100_checkpoint-1770')
+            trans = self.keypoint_predictor.infer_stream(img, step_lang_goal)
+            out ={"trans": trans}
+        else:
+            out = self.mvt1(
+                img=img,
+                proprio=proprio,
+                lang_emb=lang_emb,
+                step_single_embs=step_single_embs,
+                step_tokens_embs=step_tokens_embs,
+                step_lang_goal=step_lang_goal,
+                lang_goal=lang_goal,
+                wpt_local=wpt_local_stage_one,
+                rot_x_y=rot_x_y,
+                **kwargs,
+            )
 
         if self.stage_two:
             with torch.no_grad():
