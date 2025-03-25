@@ -409,23 +409,23 @@ class RVTAgent:
         self.clip_model.eval()
 
         # load image_analyzer
-        if self._network.mvt1.step_lang_type in {44, 45, 46, 47}:
-            if self._network.mvt1.step_lang_type == 44:
-                # self.image_analyzer = ImageAnalyzer('fewer_colors_switched_pos_lang_level_1_episodes_100_checkpoint-1755')
-                self.image_analyzer = ImageAnalyzer('random_pos_lang_level_1_episodes_100_checkpoint-1770')
-            elif self._network.mvt1.step_lang_type == 45:
-                # self.image_analyzer = ImageAnalyzer('fewer_colors_switched_pos_lang_level_2_episodes_100_checkpoint-1755')
-                self.image_analyzer = ImageAnalyzer('random_pos_lang_level_2_episodes_100_checkpoint-1770')
-            elif self._network.mvt1.step_lang_type == 47:
-                self.image_analyzer = ImageAnalyzer('random_pos_lang_level_5_episodes_100_checkpoint-1770')
+        # if self._network.mvt1.step_lang_type in {44, 45, 46, 47}:
+        #     if self._network.mvt1.step_lang_type == 44:
+        #         # self.image_analyzer = ImageAnalyzer('fewer_colors_switched_pos_lang_level_1_episodes_100_checkpoint-1755')
+        #         self.image_analyzer = ImageAnalyzer('random_pos_lang_level_1_episodes_100_checkpoint-1770')
+        #     elif self._network.mvt1.step_lang_type == 45:
+        #         # self.image_analyzer = ImageAnalyzer('fewer_colors_switched_pos_lang_level_2_episodes_100_checkpoint-1755')
+        #         self.image_analyzer = ImageAnalyzer('random_pos_lang_level_2_episodes_100_checkpoint-1770')
+        #     elif self._network.mvt1.step_lang_type == 47:
+        #         self.image_analyzer = ImageAnalyzer('random_pos_lang_level_5_episodes_100_checkpoint-1770')
 
     def unload_clip(self):
         del self.clip_model
         del self.clip_preprocess
 
-        # unload image_analyzer
-        if self._network.mvt1.step_lang_type in {44, 45, 46, 47}:
-            del self.image_analyzer
+        # # unload image_analyzer
+        # if self._network.mvt1.step_lang_type in {44, 45, 46, 47}:
+        #     del self.image_analyzer
 
         with torch.cuda.device(self._device):
             torch.cuda.empty_cache()

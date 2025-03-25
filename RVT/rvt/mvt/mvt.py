@@ -497,14 +497,9 @@ class MVT(nn.Module):
             if not hasattr(self, 'keypoint_predictor'):
                 if self.mvt1.step_lang_type == 44:
                     self.keypoint_predictor = KeypointPredictor(
-                        'fewer_colors_switched_pos_keypoints_lang_level_1_episodes_100_checkpoint-1755')
-                    # self.keypoint_predictor = KeypointPredictor(
-                    #     'random_pos_keypoints_lang_level_1_episodes_100_checkpoint-1770')
+                        'keypoints_lang_level_1_episodes_100_checkpoint-1770')
                 elif self.mvt1.step_lang_type == 45:
-                    self.keypoint_predictor = KeypointPredictor(
-                        'fewer_colors_switched_pos_keypoints_lang_level_2_episodes_100_checkpoint-1755')
-                    # self.keypoint_predictor = KeypointPredictor(
-                    #     'random_pos_keypoints_lang_level_2_episodes_100_checkpoint-1770')
+                    raise ValueError('file not found')
             trans = self.keypoint_predictor.infer_stream(img, step_lang_goal)
             out ={"trans": trans}
         else:
