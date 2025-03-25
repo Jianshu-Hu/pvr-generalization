@@ -7,9 +7,6 @@
 [submodule "rlbench"]
 	path = rlbench
 	url = https://github.com/stepjam/RLBench.git
-[submodule "RVT/rvt/libs/RLBench"]
-	path = RVT/rvt/libs/RLBench
-	url = https://github.com/buttomnutstoast/RLBench.git
 [submodule "RVT/rvt/libs/peract"]
 	path = RVT/rvt/libs/peract
 	url = https://github.com/NVlabs/peract.git
@@ -28,3 +25,6 @@
 [submodule "sam2"]
 	path = sam2
 	url = https://github.com/facebookresearch/sam2.git
+[submodule "RVT/rvt/libs/RLBench"]
+	path = RVT/rvt/libs/RLBench
+	url = https://github.com/Jianshu-Hu/RLBench.git

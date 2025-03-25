@@ -419,22 +419,16 @@ def fill_replay(
             print(episode_keypoints)
 
             keypoint_path = os.path.join(data_path, EPISODE_FOLDER % d_idx, 'episode_keypoints.npy')
-            lang_goal_path = os.path.join(data_path, EPISODE_FOLDER % d_idx, 'lang_goal.npy')
             if not os.path.exists(keypoint_path):
                 np.save(keypoint_path, np.array(episode_keypoints))
                 print('save keypoint index to ' + str(keypoint_path))
-            if not os.path.exists(lang_goal_path):
-                print('save language instruction to ' + str(lang_goal_path))
-                np.save(lang_goal_path, np.array([descs]))
 
             # Specify the path to the JSON file
             file_path = os.path.join(data_path, EPISODE_FOLDER % d_idx, 'keypoint_response.json')
             if os.path.exists(file_path):
                 # Open and load the JSON file
                 with open(file_path, "r") as file:
-                    data = json.load(file)
-                # Use regex to find substrings that start with '-' and end with '.'
-                step_descs = re.findall(r"\*\*Keyframe \d+ to Keyframe \d+\*\*: (.+?)(?=\n|$)", data)
+                    step_descs = json.load(file)
                 assert len(step_descs) == len(episode_keypoints)
                 print('load low-level language instruction from llm')
             else:

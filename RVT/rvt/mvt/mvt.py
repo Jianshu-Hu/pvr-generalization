@@ -493,7 +493,7 @@ class MVT(nn.Module):
         else:
             wpt_local_stage_one = wpt_local
 
-        if self.mvt1.step_lang_type in {44, 45, 46, 47}:
+        if self.mvt1.step_lang_type in {44, 45, 46, 47} and not self.training:
             if not hasattr(self, 'keypoint_predictor'):
                 if self.mvt1.step_lang_type == 44:
                     self.keypoint_predictor = KeypointPredictor(
