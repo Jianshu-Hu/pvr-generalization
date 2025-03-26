@@ -1,12 +1,6 @@
 [submodule "robot-colosseum"]
 	path = robot-colosseum
 	url = https://github.com/Jianshu-Hu/robot-colosseum-rvt.git
-[submodule "pyrep"]
-	path = pyrep
-	url = https://github.com/stepjam/PyRep.git
-[submodule "rlbench"]
-	path = rlbench
-	url = https://github.com/stepjam/RLBench.git
 [submodule "RVT/rvt/libs/peract"]
 	path = RVT/rvt/libs/peract
 	url = https://github.com/NVlabs/peract.git
