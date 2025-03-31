@@ -358,6 +358,8 @@ class RVTAgent:
 
         self.scaler = GradScaler(enabled=self.amp)
 
+        self.debug = False
+
     def build(self, training: bool, device: torch.device = None):
         self._training = training
         self._device = device
@@ -411,8 +413,7 @@ class RVTAgent:
         # load image_analyzer
         # if self._network.mvt1.step_lang_type in {44, 45, 46, 47}:
         #     if self._network.mvt1.step_lang_type == 44:
-        #         # self.image_analyzer = ImageAnalyzer('fewer_colors_switched_pos_lang_level_1_episodes_100_checkpoint-1755')
-        #         self.image_analyzer = ImageAnalyzer('random_pos_lang_level_1_episodes_100_checkpoint-1770')
+        #         self.image_analyzer = ImageAnalyzer('lang_plan_lang_level_1_episodes_200_checkpoint-3565')
         #     elif self._network.mvt1.step_lang_type == 45:
         #         # self.image_analyzer = ImageAnalyzer('fewer_colors_switched_pos_lang_level_2_episodes_100_checkpoint-1755')
         #         self.image_analyzer = ImageAnalyzer('random_pos_lang_level_2_episodes_100_checkpoint-1770')
@@ -702,14 +703,15 @@ class RVTAgent:
             action_trans = self.get_action_trans(
                 wpt_local, pts, out, dyn_cam_info, dims=(bs, nc, h, w)
             )
-            # # visualize the training data
-            # if not hasattr(self, 'counter'):
-            #     self.counter = 0
-            # else:
-            #     self.counter += 1
-            # print(f'{self.counter}: {step_lang_goal}')
-            # np.save(f'keypoint_{self.counter}.npy', action_trans.cpu().numpy())
-            # print(f'keypoint saved to to keypoint_{self.counter}.npy')
+            # visualize the training data
+            if self.debug:
+                if not hasattr(self, 'counter'):
+                    self.counter = 0
+                else:
+                    self.counter += 1
+                print(f'{self.counter}: {step_lang_goal}')
+                np.save(f'keypoint_{self.counter}.npy', action_trans.cpu().numpy())
+                print(f'keypoint saved to to keypoint_{self.counter}.npy')
 
         loss_log = {}
         if backprop:
@@ -909,6 +911,7 @@ class RVTAgent:
                 # response= self.image_analyzer.infer_stream(
                 #         img=observation['front_rgb'].cpu().numpy()[0, 0],
                 #         lang_goal=lang_goal)
+
                 print(response)
                 step_lang_goal = response
                 step_desc_tokens = clip.tokenize([response])
@@ -974,17 +977,32 @@ class RVTAgent:
         _, rot_q, grip_q, collision_q, y_q, _ = self.get_q(
             out, dims=(bs, nc, h, w), only_pred=True, get_q_trans=False
         )
-        # # visualize the eval results
-        # q_trans, rot_q, grip_q, collision_q, y_q, _ = self.get_q(
-        #     out, dims=(bs, nc, h, w), only_pred=True, get_q_trans=True
-        # )
-        # if not hasattr(self, 'counter'):
-        #     self.counter = 0
-        # else:
-        #     self.counter += 1
-        # print(f'{self.counter}: {response}')
-        # np.save(f'keypoint_{self.counter}.npy', q_trans.cpu().numpy())
-        # print(f'keypoint saved to to keypoint_{self.counter}.npy')
+        # debug
+        if self.debug:
+            # visualize the eval results
+            if not hasattr(self, 'counter'):
+                self.counter = 0
+            else:
+                self.counter += 1
+            np.save(f'first_stage_keypoint_{self.counter}.npy', out['trans'].cpu().numpy())
+            print(f'first stage keypoint saved to to first_stage_keypoint_{self.counter}.npy')
+            np.save(f'second_stage_keypoint_{self.counter}.npy', out['mvt2']['trans'].cpu().numpy())
+            print(f'second stage keypoint saved to to second_stage_keypoint_{self.counter}.npy')
+
+            # (bs, 3)
+            eval_wpt_local = self._network.get_wpt(out, mvt1_or_mvt2=False, dyn_cam_info=dyn_cam_info)
+            # (bs, 1, num_img, 2)
+            eval_wpt_img = self._network.mvt1.get_pt_loc_on_img(
+                eval_wpt_local.unsqueeze(1), dyn_cam_info=dyn_cam_info
+            )
+            eval_action_trans = mvt_utils.generate_hm_from_pt(
+                eval_wpt_img.squeeze(1).reshape(-1, 2),
+                (h, w),
+                sigma=self.gt_hm_sigma,
+                thres_sigma_times=3,
+            )
+            np.save(f'final_keypoint_{self.counter}.npy', eval_action_trans.cpu().numpy())
+            print(f'final keypoint saved to to final_keypoint_{self.counter}.npy')
 
         pred_wpt, pred_rot_quat, pred_grip, pred_coll = self.get_pred(
             out, rot_q, grip_q, collision_q, y_q, rev_trans, dyn_cam_info

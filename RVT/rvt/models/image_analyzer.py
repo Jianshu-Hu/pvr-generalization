@@ -33,9 +33,7 @@ class ImageAnalyzer():
         pil_image.save(image_bytes_io, format="PNG")  # PNG or JPEG
         image_bytes = image_bytes_io.getvalue()
         single_data = {'messages': [{'role': 'user',
-                                     'content': '<image>What is the current step for solving the task: ' + lang_goal + '?'},
-                                    {'role': 'assistant',
-                                     'content': 'The arm stack the green cup onto the magenta cup.'}],
+                                     'content': '<image>What is the current step for solving the task: ' + lang_goal + '?'}],
                        'images': [{'bytes': image_bytes,
                                    'path': None}]}
 
@@ -55,7 +53,7 @@ class ImageAnalyzer():
 
 
 class KeypointPredictor():
-    def __init__(self, model_ckpt):
+    def __init__(self, model_ckpt, cot=0):
         # model
         # TODO:change the directory here
         last_model_checkpoint = '/bd_byta6000i0/users/jhu/VLM-finetune/saved_ckpts/'+model_ckpt
@@ -65,6 +63,8 @@ class KeypointPredictor():
         self.max_new_tokens = 512
         self.temperature = 0
         self.stream = True
+
+        self.cot = cot
 
         # Get model and template, and load LoRA weights.
         self.engine = PtEngine(model_id_or_path, adapters=[last_model_checkpoint])
@@ -81,14 +81,39 @@ class KeypointPredictor():
             pil_image.save(image_bytes_io, format="PNG")  # PNG or JPEG
             image_bytes = image_bytes_io.getvalue()
             all_view_image_bytes.append(image_bytes)
-        single_data = {"messages": [{"role": "user",
-                                     "content": "<image><image><image> Here are the different views of"
-                                                " the scene where " + lang_goal +
-                                                " What are the keypoints in each view?"},
-                                    {"role": "assistant",
-                                     "content": f'{[0, 0]}, {[0, 0]}, {[0, 0]}'}],
-                       'images': [{'bytes': all_view_image_bytes[view],
-                                   'path': None} for view in range(img.size(1))]}
+        if self.cot == 1:
+            single_data = {"messages": [{"role": "system",
+                                         "content": "A conversation between User and Assistant."
+                                                    " The user asks a question, and the Assistant solves it."
+                                                    " The assistant first thinks about the reasoning process"
+                                                    " in the mind and then provides the user with the answer."
+                                                    " The reasoning process and answer are enclosed within"
+                                                    " <think> </think> and <answer> </answer> tags, respectively,"
+                                                    " i.e., <think> reasoning process here </think>"
+                                                    " <answer> answer here </answer>."},
+                                        {"role": "user",
+                                         "content": f"<image><image><image> Here are the different views of"
+                                                    f" the scene where a robot arm {lang_goal}."
+                                                    f" What is the next step and "
+                                                    f"what are the keypoints in each view?"}],
+                           'images': [{'bytes': all_view_image_bytes[view],
+                                       'path': None} for view in range(img.size(1))]}
+        elif self.cot == 2:
+            single_data = {"messages": [
+                {"role": "user",
+                 "content": f"<image><image><image> Here are the different views of"
+                            f" the scene where a robot arm {lang_goal}."
+                            f" What is the next step and "
+                            f"what are the keypoints in each view?"}],
+                'images': [{'bytes': all_view_image_bytes[view],
+                            'path': None} for view in range(img.size(1))]}
+        elif self.cot == 0:
+            single_data = {"messages": [{"role": "user",
+                                         "content": "<image><image><image> Here are the different views of"
+                                                    " the scene where " + lang_goal +
+                                                    " What are the keypoints in each view?"}],
+                           'images': [{'bytes': all_view_image_bytes[view],
+                                       'path': None} for view in range(img.size(1))]}
 
         infer_request = InferRequest(**single_data)
 
@@ -103,8 +128,26 @@ class KeypointPredictor():
             # print(delta, end='', flush=True)
         # print(response)
 
-        # Extract numbers using regex
-        numbers = list(map(int, re.findall(r'\d+', response)))
+        # Extract response
+        if self.cot == 1:
+            print(response)
+            match = re.search(r"<answer>(.*?)</answer>", response, re.DOTALL)
+            answer = match.group(1).strip()
+            print(answer)
+
+            match = re.search(r"The next step is (.*?)[.]\s*", answer)
+            step_lang = match.group(1).strip()
+            print(f'step lang: {step_lang}')
+            numbers = list(map(int, re.findall(r'\d+', answer)))
+        elif self.cot == 2:
+            match = re.search(r"The next step is (.*?)[.]\s*", response)
+            step_lang = match.group(1).strip()
+            numbers = list(map(int, re.findall(r'\d+', response)))
+            print(step_lang)
+        elif self.cot == 0:
+            step_lang = None
+            # Extract numbers using regex
+            numbers = list(map(int, re.findall(r'\d+', response)))
 
         # Reshape into (N, 2) array
         coordinates = np.array(numbers).reshape(-1, 2)
@@ -119,4 +162,4 @@ class KeypointPredictor():
             thres_sigma_times=3,
         )
 
-        return action_trans.unsqueeze(0)
+        return step_lang, action_trans.unsqueeze(0)

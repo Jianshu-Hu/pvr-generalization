@@ -8,6 +8,7 @@ import random
 
 import torch
 import numpy as np
+import clip
 
 from torch import nn
 from torch.cuda.amp import autocast
@@ -19,6 +20,7 @@ from rvt.mvt.config import get_cfg_defaults
 # from rvt.mvt.renderer import BoxRenderer
 from rvt.mvt.groundingdino_wrapper import GroundingDinoHeatMap
 from rvt.models.image_analyzer import KeypointPredictor
+from rvt.utils.dataset import _clip_encode_text
 
 
 class MVT(nn.Module):
@@ -156,6 +158,8 @@ class MVT(nn.Module):
         )
         if self.stage_two:
             self.mvt2 = MVTSingle(**args, renderer=self.renderer)
+
+        self.debug = False
 
     def get_pt_loc_on_img(self, pt, mvt1_or_mvt2, dyn_cam_info, out=None):
         """
@@ -416,76 +420,17 @@ class MVT(nn.Module):
                 mvt1_or_mvt2=True,
                 dyn_cam_info=None,
             )
-            # if not self.pre_heat_map and self.training:
-            #     bs = len(pc)
-            #     # (bs*2, 3)
-            #     box_center = (torch.rand(bs, 3)*2-1).to(wpt_local.device)
-            #     box_size = (torch.rand(bs, 3)*0.2).to(wpt_local.device)
-            #     box_min = (torch.clip(box_center-box_size/2, min=-1)).unsqueeze(1)
-            #     box_max = (torch.clip(box_center+box_size/2, max=1)).unsqueeze(1)
-            #
-            #     for i in range(bs):
-            #         # (num_point)
-            #         within_range = (torch.sum(pc[i] >= box_min[i], dim=-1) == 3) & (
-            #                     torch.sum(pc[i] <= box_max[i], dim=-1) == 3)
-            #         pc[i] = pc[i][~within_range]
-            #         img_feat[i] = img_feat[i][~within_range]
-            # img = self.render(
-            #     pc=pc,
-            #     img_feat=img_feat,
-            #     img_aug=img_aug,
-            #     mvt1_or_mvt2=True,
-            #     dyn_cam_info=None,
-            # )
-            # if self.pre_heat_map and not self.training:
-            if self.pre_heat_map:
-                img = self.render(
-                    pc=pc,
-                    img_feat=img_feat,
-                    img_aug=img_aug,
-                    mvt1_or_mvt2=True,
-                    dyn_cam_info=None,
-                )
-                # if not hasattr(self, 'grounding_heat_map'):
-                #     self.grounding_heat_map = GroundingDinoHeatMap()
-                #     print('Use grounding dino for extracting roi.')
-                if self.training:
-                    hm = self.grounding_heat_map(img, lang_goal)
-                else:
-                    hm = self.grounding_heat_map(img, np.array([[lang_goal]]))
-                # (bs*2, 3)
-                box_global_point = self.get_wpt(
-                    hm, y_q=None, mvt1_or_mvt2=True,
-                    dyn_cam_info=None,
-                )
 
-                pc, img_feat = self.grounding_heat_map.filter_pc(box_global_point, pc, img_feat)
-                # if not hasattr(self, 'counter'):
-                #     self.counter = 0
-                # while os.path.exists(f'img_before_crop_{self.counter}.npy'):
-                #     self.counter += 1
-                # np.save(f'img_before_crop_{self.counter}.npy', img.detach().cpu().numpy()[:, :, 3:6, :, :])
-                # print(f'save to img_before_crop_{self.counter}.npy')
-                img = self.render(
-                    pc=pc,
-                    img_feat=img_feat,
-                    img_aug=img_aug,
-                    mvt1_or_mvt2=True,
-                    dyn_cam_info=None,
-                )
-                # while os.path.exists(f'img_after_crop_{self.counter}.npy'):
-                #     self.counter += 1
-                # np.save(f'img_after_crop_{self.counter}.npy', img.detach().cpu().numpy()[:, :, 3:6, :, :])
-                # print(f'save to img_after_crop_{self.counter}.npy')
-
-        # # visualize the training data
-        # if not hasattr(self, 'counter'):
-        #     self.counter = 0
-        # else:
-        #     self.counter += 1
-        # print(f'{self.counter}: {step_lang_goal}')
-        # np.save(f'img_front_rgb_{self.counter}.npy', img.detach().cpu().numpy()[:, :, 3:6, :, :])
-        # print(f'current obs saved to to img_front_rgb_{self.counter}.npy')
+        # debug
+        if self.debug:
+            # visualize the training data
+            if not hasattr(self, 'counter'):
+                self.counter = 0
+            else:
+                self.counter += 1
+            print(f'{self.counter}: {step_lang_goal}')
+            np.save(f'img_stage_1_{self.counter}.npy', img.cpu().numpy()[:, :, 3:6])
+            print(f'img stage 1 saved to to img_stage_1_{self.counter}.npy')
 
         if self.training:
             wpt_local_stage_one = wpt_local
@@ -494,13 +439,27 @@ class MVT(nn.Module):
             wpt_local_stage_one = wpt_local
 
         if self.mvt1.step_lang_type in {44, 45, 46, 47} and not self.training:
+            cot = 0
             if not hasattr(self, 'keypoint_predictor'):
                 if self.mvt1.step_lang_type == 44:
                     self.keypoint_predictor = KeypointPredictor(
-                        'keypoints_lang_level_1_episodes_100_checkpoint-1770')
-                elif self.mvt1.step_lang_type == 45:
-                    raise ValueError('file not found')
-            trans = self.keypoint_predictor.infer_stream(img, step_lang_goal)
+                        'keypoints_lang_level_1_episodes_100_checkpoint-1770', cot=cot)
+                    # self.keypoint_predictor = KeypointPredictor(
+                    #     'keypoints_lang_level_1_cot_1_episodes_100_checkpoint-3540', cot=cot)
+                    if cot > 0:
+                        self.clip_model, self.clip_preprocess = clip.load("RN50", device=lang_emb.device)
+                        self.clip_model.eval()
+            if cot == 0:
+                _, trans = self.keypoint_predictor.infer_stream(img, step_lang_goal)
+            else:
+                step_lang_goal, trans = self.keypoint_predictor.infer_stream(img, step_lang_goal)
+
+                step_desc_tokens = clip.tokenize([step_lang_goal])
+                step_desc_tokens_tensor = step_desc_tokens.to(lang_emb.device)
+
+                with torch.no_grad():
+                    _, step_tokens_embs = _clip_encode_text(self.clip_model, step_desc_tokens_tensor)
+                step_tokens_embs = step_tokens_embs.float()
             out ={"trans": trans}
         else:
             out = self.mvt1(
@@ -560,6 +519,10 @@ class MVT(nn.Module):
                     mvt1_or_mvt2=False,
                     dyn_cam_info=None,
                 )
+                # debug
+                if self.debug:
+                    np.save(f'img_stage_2_{self.counter}.npy', img.cpu().numpy()[:, :, 3:6])
+                    print(f'img stage 2 saved to to img_stage_2_{self.counter}.npy')
 
             if not self.training and self.mvt1.step_lang_type in {41, 42, 43}:
                 out_mvt2 = self.mvt2(
