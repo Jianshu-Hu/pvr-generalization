@@ -27,7 +27,7 @@ from rvt.mvt.attn import (
     FixedPositionalEncoding,
 )
 from rvt.mvt.raft_utils import ConvexUpSample
-from rvt.mvt.groundingdino_wrapper import GroundingDinoHeatMap, GroundingDinoFeature
+# from rvt.mvt.groundingdino_wrapper import GroundingDinoHeatMap, GroundingDinoFeature
 from rvt.utils.dataset import _clip_encode_text
 
 

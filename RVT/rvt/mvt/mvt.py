@@ -18,7 +18,7 @@ import rvt.mvt.utils as mvt_utils
 from rvt.mvt.mvt_single import MVT as MVTSingle
 from rvt.mvt.config import get_cfg_defaults
 # from rvt.mvt.renderer import BoxRenderer
-from rvt.mvt.groundingdino_wrapper import GroundingDinoHeatMap
+# from rvt.mvt.groundingdino_wrapper import GroundingDinoHeatMap
 from rvt.models.image_analyzer import KeypointPredictor
 from rvt.utils.dataset import _clip_encode_text
 
