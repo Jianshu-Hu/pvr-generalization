@@ -381,7 +381,7 @@ def fill_replay(
 ):
     # TODO:find better way for running on a cluster.
     current_node = socket.gethostname()
-    task_replay_storage_folder = f'/bd_{current_node}/users/jhu/{task_replay_storage_folder}'
+    task_replay_storage_folder = f'/bd_{current_node}/users/jhu/replay_256/{task_replay_storage_folder}'
     print(f'use {task_replay_storage_folder} as the replay storage folder')
 
     disk_exist = False

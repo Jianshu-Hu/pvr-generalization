@@ -21,7 +21,7 @@ SCENE_BOUNDS = [
     0.5,
     1.6,
 ]  # [x_min, y_min, z_min, x_max, y_max, z_max] - the metric volume to be voxelized
-IMAGE_SIZE = 128
+IMAGE_SIZE = 256
 VOXEL_SIZES = [100]  # 100x100x100 voxels
 LOW_DIM_SIZE = 4  # {left_finger_joint, right_finger_joint, gripper_open, timestep}
 

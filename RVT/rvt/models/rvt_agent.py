@@ -30,7 +30,7 @@ from yarr.agents.agent import ActResult
 from rvt.utils.dataset import _clip_encode_text
 from rvt.utils.lr_sched_utils import GradualWarmupScheduler
 
-from rvt.models.image_analyzer import ImageAnalyzer
+# from rvt.models.image_analyzer import ImageAnalyzer
 
 
 def eval_con(gt, pred):
